@@ -56,11 +56,16 @@ def test_type_result_has_next_button_on_correct():
     assert "Верно" in text
 
 
-def test_end_review_intro_grammar():
-    one, _ = bot.build_end_review_intro(1)
-    assert "которая вызвала" in one
-    many, _ = bot.build_end_review_intro(3)
-    assert "которые вызвали" in many
+def test_end_review_intro_offers_finish_and_review_no_discard():
+    """Regression: the post-deck screen must let the user finish & save, not
+    only review-or-discard (which lost the whole session)."""
+    text, kb = bot.build_end_review_intro(3)
+    assert "Основная колода пройдена" in text
+    assert "3" in text
+    flat = str(kb)
+    assert "start_review" in flat        # повторить ошибки
+    assert "finish_session" in flat      # завершить и сохранить
+    assert "stop_session" not in flat    # no discard trap here
 
 
 def test_final_screen_counts_and_review_block():
@@ -97,7 +102,7 @@ def test_weak_menu_groups_collision_separately(db):
 def test_weak_menu_empty_state(db):
     db.ensure_user(1)
     text, _ = bot.build_menu_weak(1)
-    assert "Пока нет данных" in text
+    assert "Пока чисто" in text
 
 
 def test_size_selector_hides_10_button_when_small():

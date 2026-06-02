@@ -55,8 +55,11 @@ HELP_TEXT = (
     "*Как работает:*\n"
     "Сначала вспоминаешь сам, затем смотришь ответ и честно оцениваешь.\n"
     "Ошибочные карточки возвращаются через 2–3 хода и снова в конце.\n\n"
-    "*В меню выбора колоды:*\n"
-    "🎯 Только ошибки — тренировка только сложных карточек\n"
+    "*В главном меню:*\n"
+    "📊 Статистика · 📋 Сложные — список твоих ошибок\n"
+    "📈 История · ❓ Помощь\n\n"
+    "*Перед стартом колоды:*\n"
+    "🎯 Только ошибки — тренировать лишь сложные карточки\n"
     "✏️ Режим ввода — печатать V2 и V3 вместо кнопок\n\n"
     "*На карточке глагола:*\n"
     "💡 Подсказка — первая буква и длина V2"
@@ -229,7 +232,7 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
             f"🎓 Освоено: *{lt['mastered']}*\n"
             f"🎯 Изучается: *{lt['learning']}*\n"
             f"🗓 Сессий: *{lt['sessions']}*"
-        ) if lt["sessions"] > 0 else "\nСессий пока не завершено."
+        ) if lt["sessions"] > 0 else "\n_Заверши первую тренировку — и здесь появится статистика за всё время._"
     except Exception:
         logger.exception("Failed to load lifetime stats for user %s", user_id)
         lifetime_block = ""
@@ -251,7 +254,10 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
             f"{streak_line}"
         )
     else:
-        current_block = f"📊 *Статистика*\n\n{streak_line}Нет активной сессии.\n"
+        current_block = (
+            f"📊 *Статистика*\n\n{streak_line}"
+            f"Активной тренировки нет. Выбери тему в меню и начни! 🚀\n"
+        )
 
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Главное меню", callback_data="back_to_types")]])
     return current_block + lifetime_block, kb
@@ -272,8 +278,11 @@ def build_menu_weak(user_id: int, back_callback: str = "back_to_types",
                 lines.append(f"\n{TYPE_EMOJI[ex_type]} *{TYPE_LABEL[ex_type]}*")
                 lines.extend(_format_weak_item(ex_type, iid, cnt)
                              for iid, cnt in groups[ex_type][:10])
-        body = "\n".join(lines) if lines else \
-            "Пока нет данных. Пройди хотя бы одну сессию до конца! 📚"
+        body = "\n".join(lines) if lines else (
+            "Пока чисто! ✨\n"
+            "Сюда попадут карточки, в которых ты ошибаешься. "
+            "Пройди тренировку — и слабые места появятся здесь."
+        )
     except Exception:
         logger.exception("Failed to load weak items for user %s", user_id)
         body = "Не удалось загрузить данные."
@@ -294,7 +303,8 @@ def build_menu_history(user_id: int, back_callback: str = "back_to_types",
             if len(lines) >= 10:
                 body += "\n\n_показаны последние 10 сессий_"
         else:
-            body = "История пуста."
+            body = ("Здесь пока пусто.\n"
+                    "Пройди первую тренировку — и тут появятся результаты! 🚀")
     except Exception:
         logger.exception("Failed to load history for user %s", user_id)
         body = "Не удалось загрузить данные."
@@ -353,8 +363,8 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ Написать",  callback_data="type_answer")],
-            [InlineKeyboardButton("💡 Подсказка", callback_data="hint"),
-             InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session")],
+            [InlineKeyboardButton("💡 Подсказка", callback_data="hint")],
+            [InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session")],
         ])
     else:
         text = (
@@ -365,8 +375,8 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
-            [InlineKeyboardButton("💡 Подсказка",      callback_data="hint"),
-             InlineKeyboardButton("⏹ Стоп",            callback_data="stop_session")],
+            [InlineKeyboardButton("💡 Подсказка",      callback_data="hint")],
+            [InlineKeyboardButton("⏹ Стоп",            callback_data="stop_session")],
         ])
     return text, kb
 
@@ -385,8 +395,8 @@ def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     )
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ Знал(а)",    callback_data="knew"),
-            InlineKeyboardButton("❌ Не знал(а)", callback_data="didnt_know"),
+            InlineKeyboardButton("✅ Помню",    callback_data="knew"),
+            InlineKeyboardButton("❌ Не помню", callback_data="didnt_know"),
         ],
         [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
     ])
@@ -512,7 +522,7 @@ def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, 
             kb_next,
         )
     return (
-        f"❌ *Ты написал(а):* `{_sanitize_user_text(user_input)}`\n\n"
+        f"❌ *Твой ответ:* `{_sanitize_user_text(user_input)}`\n\n"
         f"{forms}\n"
         f"🇷🇺 _{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
@@ -522,18 +532,15 @@ def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, 
 
 
 def build_end_review_intro(count: int) -> tuple[str, InlineKeyboardMarkup]:
-    if count == 1:
-        which, verb = "которая", "вызвала"
-    else:
-        which, verb = "которые", "вызвали"
     text = (
         f"🏁 *Основная колода пройдена!*\n\n"
-        f"Повторим *{count}* {_card_plural(count)}, {which} {verb} затруднение.\n\n"
-        f"Готов(а)?"
+        f"Карточек с ошибками: *{count}*.\n"
+        f"Закрепим их повторением — или завершим тренировку.\n\n"
+        f"_Результат сохранится в любом случае._"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Начать повторение", callback_data="start_review")],
-        [InlineKeyboardButton("⏹ Стоп",              callback_data="stop_session")],
+        [InlineKeyboardButton("🔄 Повторить ошибки",      callback_data="start_review")],
+        [InlineKeyboardButton("🏁 Завершить и сохранить", callback_data="finish_session")],
     ])
     return text, kb
 
@@ -839,6 +846,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # ── Stop ──
     if data == "stop_session":
+        session = context.user_data.get("session")
+        # Main deck already finished → never discard, finalize & save instead.
+        if session and session.get("phase") == "end_review":
+            await show_results(chat_id, session, context.bot)
+            return
         session = context.user_data.pop("session", None)
         text, kb = build_type_selector()
         if session and session["results"]:
@@ -979,6 +991,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data == "start_review":
         await show_card(chat_id, session, context.bot, type_mode=type_mode)
+        return
+
+    if data == "finish_session":
+        session["end_review"] = []          # skip optional review, finalize & save
+        await show_results(chat_id, session, context.bot)
         return
 
     item = current_item(session)
