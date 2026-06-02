@@ -222,6 +222,24 @@ def _progress_header(user_id: int | None) -> str:
 
 # ─── Session ──────────────────────────────────────────────────────────────────
 
+# Bump when the session dict shape changes incompatibly. Persisted sessions
+# (PicklePersistence) from older code are normalized on load; structurally
+# broken ones are dropped so a redeploy never crashes an active user.
+SESSION_VERSION = 1
+
+_SESSION_DEFAULTS: dict = {
+    "exercise_type":  "verbs",
+    "pos":            0,
+    "first_shown":    set(),
+    "review_buffer":  [],
+    "end_review":     [],
+    "phase":          "main",
+    "message_id":     None,
+    "awaiting_input": False,
+    "user_id":        None,
+}
+
+
 def new_session(exercise_type: str, size: int | None = None,
                 user_id: int | None = None, deck: list | None = None) -> dict:
     if deck is not None:
@@ -244,7 +262,22 @@ def new_session(exercise_type: str, size: int | None = None,
         "message_id":     None,
         "awaiting_input": False,
         "user_id":        user_id,
+        "_v":             SESSION_VERSION,
     }
+
+
+def normalize_session(s: object) -> dict | None:
+    """Backfill defaults onto a possibly-older (unpickled) session in place.
+    Returns None if it's structurally unusable — caller then treats it as no
+    active session instead of crashing."""
+    if not isinstance(s, dict) or "queue" not in s or "results" not in s:
+        return None
+    for k, v in _SESSION_DEFAULTS.items():
+        if k not in s:
+            s[k] = v.copy() if isinstance(v, (set, list, dict)) else v
+    s.setdefault("original_total", len(s["queue"]))
+    s["_v"] = SESSION_VERSION
+    return s
 
 
 def current_item(session: dict) -> dict | None:
@@ -995,6 +1028,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id      = query.from_user.id
     type_mode    = context.user_data.get("type_mode", False)
 
+    # Heal/drop a session that survived a redeploy with an older shape.
+    _raw = context.user_data.get("session")
+    if _raw is not None and normalize_session(_raw) is None:
+        context.user_data.pop("session", None)
+
     # ── Stop ──
     if data == "stop_session":
         session = context.user_data.get("session")
@@ -1279,6 +1317,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session = context.user_data.get("session")
+    if session is not None and normalize_session(session) is None:
+        context.user_data.pop("session", None)
+        session = None
     if not session or not session.get("awaiting_input"):
         return
 

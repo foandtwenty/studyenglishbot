@@ -85,3 +85,32 @@ def test_full_pass_reaches_total_with_no_lost_cards():
         guard += 1
     assert len(s["first_shown"]) == total
     assert len(s["results"]) == total
+
+
+def test_new_session_has_version():
+    s = bot.new_session("verbs", deck=[A])
+    assert s["_v"] == bot.SESSION_VERSION
+
+
+def test_normalize_backfills_missing_keys():
+    # an "old" session missing keys added later
+    old = {"queue": [A], "results": {}, "pos": 0, "exercise_type": "verbs"}
+    out = bot.normalize_session(old)
+    assert out is old                      # normalized in place
+    for k in ("phase", "first_shown", "review_buffer", "end_review",
+              "awaiting_input", "user_id", "original_total"):
+        assert k in out
+    assert out["_v"] == bot.SESSION_VERSION
+
+
+def test_normalize_drops_structurally_broken():
+    assert bot.normalize_session(None) is None
+    assert bot.normalize_session({"foo": 1}) is None          # no queue/results
+    assert bot.normalize_session("not a dict") is None
+
+
+def test_normalize_does_not_share_mutable_defaults():
+    a = bot.normalize_session({"queue": [], "results": {}})
+    b = bot.normalize_session({"queue": [], "results": {}})
+    a["first_shown"].add("x")
+    assert b["first_shown"] == set()       # independent objects
