@@ -105,6 +105,32 @@ def test_weak_menu_empty_state(db):
     assert "Пока чисто" in text
 
 
+def test_progress_header_empty_for_new_user(db):
+    db.ensure_user(1)
+    assert bot._progress_header(1) == ""
+    assert bot._progress_header(None) == ""
+
+
+def test_progress_header_shows_after_a_session(db):
+    db.ensure_user(1)
+    db.save_session(1, 2, 1, 3, {"go": True, "do": True, "keep": False}, "verbs")
+    header = bot._progress_header(1)
+    assert "Освоено" in header
+
+
+def test_main_menu_shows_progress_for_returning_user(db):
+    db.ensure_user(1)
+    db.save_session(1, 1, 0, 1, {"go": True}, "verbs")
+    text, _ = bot.build_type_selector(user_id=1)
+    assert "Освоено" in text and "Что хочешь потренировать" in text
+
+
+def test_main_menu_clean_for_new_user(db):
+    db.ensure_user(2)
+    text, _ = bot.build_type_selector(user_id=2)
+    assert "Освоено" not in text          # no stats noise before the first session
+
+
 def test_size_selector_hides_10_button_when_small():
     # adjprep has 58 cards -> shows 10/20; a tiny synthetic type would hide 10,
     # but here just assert the real types expose sane buttons.

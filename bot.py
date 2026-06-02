@@ -134,6 +134,27 @@ def _build_weak_deck(exercise_type: str, user_id: int) -> list:
     return [item for item, _ in deck]
 
 
+def _progress_header(user_id: int | None) -> str:
+    """Compact at-a-glance progress for the main menu. Empty for new users."""
+    if not user_id:
+        return ""
+    try:
+        streak = db.get_streak(user_id)
+        lt     = db.get_lifetime_stats(user_id)
+    except Exception:
+        return ""
+    if lt["sessions"] == 0:
+        return ""
+    lines = []
+    if streak:
+        lines.append(f"🔥 Серия: *{streak} {_streak_label(streak)}*")
+    second = f"🎓 Освоено: *{lt['mastered']}*"
+    if lt["learning"]:
+        second += f"  ·  🎯 Изучается: *{lt['learning']}*"
+    lines.append(second)
+    return "\n".join(lines)
+
+
 # ─── Session ──────────────────────────────────────────────────────────────────
 
 def new_session(exercise_type: str, size: int | None = None,
@@ -189,7 +210,8 @@ def progress_line(session: dict, item: dict) -> str:
 
 # ─── Selectors ────────────────────────────────────────────────────────────────
 
-def build_type_selector(welcome: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+def build_type_selector(welcome: bool = False,
+                        user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
     if welcome:
         text = (
             "👋 *Привет! Я Study English Bot.*\n\n"
@@ -203,7 +225,8 @@ def build_type_selector(welcome: bool = False) -> tuple[str, InlineKeyboardMarku
             "*Выбери тему и начнём!*"
         )
     else:
-        text = "📚 *Что хочешь потренировать?*"
+        header = _progress_header(user_id)
+        text = (f"{header}\n\n" if header else "") + "📚 *Что хочешь потренировать?*"
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔤 Неправильные глаголы",       callback_data="type_verbs")],
         [InlineKeyboardButton("📍 Предлоги in / on / at",      callback_data="type_prep")],
@@ -721,7 +744,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
-    text, kb    = build_type_selector(welcome=is_new)
+    text, kb    = build_type_selector(welcome=is_new, user_id=update.effective_user.id)
     card_msg_id = context.user_data.get("card_message_id")
     if card_msg_id:
         try:
@@ -856,7 +879,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await show_results(chat_id, session, context.bot)
             return
         session = context.user_data.pop("session", None)
-        text, kb = build_type_selector()
+        text, kb = build_type_selector(user_id=user_id)
         if session and session["results"]:
             done  = len(session["results"])
             known = sum(1 for v in session["results"].values() if v)
@@ -889,7 +912,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # ── Navigation ──
     if data == "back_to_types":
-        text, kb = build_type_selector()
+        text, kb = build_type_selector(user_id=user_id)
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
@@ -932,7 +955,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data == "new_session":
-        text, kb = build_type_selector()
+        text, kb = build_type_selector(user_id=user_id)
         msg_id   = context.user_data.get("card_message_id") or query.message.message_id
         context.user_data["card_message_id"] = msg_id
         try:
@@ -988,7 +1011,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session = context.user_data.get("session")
     if not session:
         context.user_data["card_message_id"] = query.message.message_id
-        text, kb = build_type_selector()
+        text, kb = build_type_selector(user_id=user_id)
         text = "_Активная сессия не найдена — выбери тему заново._\n\n" + text
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
