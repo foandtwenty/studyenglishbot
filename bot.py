@@ -197,10 +197,13 @@ def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"🇷🇺 _{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
     )
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Знал(а)",    callback_data="knew"),
-        InlineKeyboardButton("❌ Не знал(а)", callback_data="didnt_know"),
-    ]])
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Знал(а)",    callback_data="knew"),
+            InlineKeyboardButton("❌ Не знал(а)", callback_data="didnt_know"),
+        ],
+        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
+    ])
     return text, kb
 
 
@@ -260,7 +263,10 @@ def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
 
 
 def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, InlineKeyboardMarkup | None]:
-    kb_next = InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Следующая карточка", callback_data="next")]])
+    kb_next = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➡️ Следующая карточка", callback_data="next")],
+        [InlineKeyboardButton("⏹ Стоп",               callback_data="stop_session")],
+    ])
 
     if "sentence" in item:
         full = item["sentence"].replace("{?}", f"*{item['answer']}*")
@@ -330,7 +336,10 @@ def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, 
         f"✅ *V3:* `{item['v3']}`\n"
         f"🇷🇺 _{item['translation']}_\n\n"
         f"💬 _{item['example']}_",
-        InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Следующая карточка", callback_data="next")]]),
+        InlineKeyboardMarkup([
+            [InlineKeyboardButton("➡️ Следующая карточка", callback_data="next")],
+            [InlineKeyboardButton("⏹ Стоп",               callback_data="stop_session")],
+        ]),
     )
 
 
@@ -340,7 +349,10 @@ def build_end_review_intro(count: int) -> tuple[str, InlineKeyboardMarkup]:
         f"Повторим *{count}* {_card_plural(count)}, которые вызвали затруднение.\n\n"
         f"Готов(а)?"
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Начать повторение", callback_data="start_review")]])
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Начать повторение", callback_data="start_review")],
+        [InlineKeyboardButton("⏹ Стоп",              callback_data="stop_session")],
+    ])
     return text, kb
 
 
