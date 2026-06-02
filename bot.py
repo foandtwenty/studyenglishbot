@@ -210,7 +210,7 @@ def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
 
 def build_prep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     item     = current_item(session)
-    sentence = item["sentence"].replace("{?}", "___")
+    sentence = item["sentence"].replace("{?}", "[ ? ]")
     text = (
         f"{progress_line(session, item)}\n\n"
         f"{sentence}\n"
