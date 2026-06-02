@@ -15,7 +15,7 @@ def test_show_card_renders_and_marks_first_shown(fake_bot, make_session):
     s = make_session("verbs", [A, B])
     run(bot.show_card(1, s, fake_bot))
     assert "a" in fake_bot.last_text
-    assert "a" in s["first_shown"]           # marked only after a successful edit
+    assert "verbs::a" in s["first_shown"]     # marked only after a successful edit
 
 
 def test_show_card_on_exhausted_deck_finalizes(fake_bot, make_session, db):

@@ -70,7 +70,7 @@ def test_end_review_intro_offers_finish_and_review_no_discard():
 
 def test_final_screen_counts_and_review_block():
     session = {
-        "results": {"go": False, "keep": True},
+        "results": {"verbs::go": False, "verbs::keep": True},
         "original_total": 2, "exercise_type": "verbs", "user_id": None,
     }
     text, kb = bot.build_final(session, streak=0)

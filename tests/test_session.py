@@ -31,7 +31,7 @@ def test_current_item_and_exhaustion():
 def test_mark_known():
     s = bot.new_session("verbs", deck=[A])
     bot.mark_known(s, A)
-    assert s["results"]["a"] is True
+    assert s["results"]["verbs::a"] is True
     assert s["end_review"] == [] and s["review_buffer"] == []
 
 
@@ -39,7 +39,7 @@ def test_mark_unknown_queues_for_review_and_end(monkeypatch):
     monkeypatch.setattr(bot.random, "randint", lambda lo, hi: 2)
     s = bot.new_session("verbs", deck=[A, B, C])
     bot.mark_unknown(s, A)
-    assert s["results"]["a"] is False
+    assert s["results"]["verbs::a"] is False
     assert [bot.item_id(i) for i, _ in s["review_buffer"]] == ["a"]
     assert [bot.item_id(i) for i in s["end_review"]] == ["a"]
 
@@ -67,7 +67,7 @@ def test_mark_unknown_in_review_phase_does_not_requeue():
     s = bot.new_session("verbs", deck=[A])
     s["phase"] = "end_review"
     bot.mark_unknown(s, A)
-    assert s["results"]["a"] is False
+    assert s["results"]["verbs::a"] is False
     assert s["review_buffer"] == [] and s["end_review"] == []
 
 

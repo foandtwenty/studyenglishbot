@@ -37,12 +37,15 @@ CONTENT = {
     "adjprep": ADJ_PREPS,
 }
 
-TYPE_EMOJI = {"verbs": "🔤", "prep": "📍", "vp": "➕", "adjprep": "🔗"}
+TYPE_EMOJI = {"verbs": "🔤", "prep": "📍", "vp": "➕", "adjprep": "🔗",
+              "mixed": "🎲", "review": "🔔"}
 TYPE_LABEL = {
     "verbs":   "Неправильные глаголы",
     "prep":    "Предлоги in / on / at",
     "vp":      "Глаголы + to / -ing",
     "adjprep": "Прилагательные + предлог",
+    "mixed":   "Всё вперемешку",
+    "review":  "Повторение",
 }
 
 HELP_TEXT = (
@@ -55,7 +58,12 @@ HELP_TEXT = (
     "*Как работает:*\n"
     "Сначала вспоминаешь сам, затем смотришь ответ и честно оцениваешь.\n"
     "Ошибочные карточки возвращаются через 2–3 хода и снова в конце.\n\n"
+    "*Интервальное повторение:*\n"
+    "Карточки возвращаются по растущим интервалам (1, 2, 4, 7… дней) — "
+    "так память закрепляется надолго. Кнопка 🔔 *К повторению* в меню "
+    "показывает, что пора освежить.\n\n"
     "*В главном меню:*\n"
+    "🎲 Всё вперемешку — карточки всех типов сразу\n"
     "📊 Статистика · 📋 Сложные — список твоих ошибок\n"
     "📈 История · ❓ Помощь\n\n"
     "*Перед стартом колоды:*\n"
@@ -70,6 +78,19 @@ HELP_TEXT = (
 
 def item_id(item: dict) -> str:
     return item.get("v1") or item.get("verb") or item.get("adjective") or item.get("sentence", "?")
+
+
+def item_type(item: dict) -> str:
+    if "v1" in item:        return "verbs"
+    if "verb" in item:      return "vp"
+    if "adjective" in item: return "adjprep"
+    return "prep"
+
+
+def card_key(item: dict) -> str:
+    """Stable namespaced key used for results, scheduling and dedup. Works for
+    mixed-type decks where a bare item_id could collide across exercises."""
+    return _stat_key(item_type(item), item_id(item))
 
 
 def _streak_label(n: int) -> str:
@@ -134,6 +155,19 @@ def _build_weak_deck(exercise_type: str, user_id: int) -> list:
     return [item for item, _ in deck]
 
 
+def _mixed_pool() -> list:
+    """All cards from every exercise, for interleaved practice."""
+    return [item for lst in CONTENT.values() for item in lst]
+
+
+def _build_review_deck(user_id: int) -> list:
+    """Cards whose spaced-repetition review is due today, across all types."""
+    due  = set(db.get_due_ids(user_id))
+    deck = [item for item in _mixed_pool() if card_key(item) in due]
+    random.shuffle(deck)
+    return deck
+
+
 def _progress_header(user_id: int | None) -> str:
     """Compact at-a-glance progress for the main menu. Empty for new users."""
     if not user_id:
@@ -162,7 +196,7 @@ def new_session(exercise_type: str, size: int | None = None,
     if deck is not None:
         d = deck.copy()
     else:
-        d = CONTENT[exercise_type].copy()
+        d = _mixed_pool() if exercise_type == "mixed" else CONTENT[exercise_type].copy()
         random.shuffle(d)
         if size:
             d = d[:size]
@@ -190,7 +224,7 @@ def current_item(session: dict) -> dict | None:
 # ─── Progress line ────────────────────────────────────────────────────────────
 
 def progress_line(session: dict, item: dict) -> str:
-    emoji = TYPE_EMOJI.get(session.get("exercise_type", "verbs"), "📚")
+    emoji = TYPE_EMOJI.get(item_type(item), "📚")
     bar   = _progress_bar(session)
 
     if session["phase"] == "end_review":
@@ -198,8 +232,8 @@ def progress_line(session: dict, item: dict) -> str:
         total = len(session["queue"])
         return f"🔄 *Повторение {pos} / {total}*"
 
-    iid    = item_id(item)
-    is_new = iid not in session["first_shown"]
+    key    = card_key(item)
+    is_new = key not in session["first_shown"]
     done   = len(session["first_shown"])
     total  = session["original_total"]
 
@@ -227,11 +261,23 @@ def build_type_selector(welcome: bool = False,
     else:
         header = _progress_header(user_id)
         text = (f"{header}\n\n" if header else "") + "📚 *Что хочешь потренировать?*"
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔤 Неправильные глаголы",       callback_data="type_verbs")],
-        [InlineKeyboardButton("📍 Предлоги in / on / at",      callback_data="type_prep")],
-        [InlineKeyboardButton("➕ Глаголы + to / -ing",        callback_data="type_vp")],
-        [InlineKeyboardButton("🔗 Прилагательные + предлог",   callback_data="type_adjprep")],
+
+    rows: list[list[InlineKeyboardButton]] = []
+    due = 0
+    if user_id:
+        try:
+            due = db.get_due_count(user_id)
+        except Exception:
+            due = 0
+    if due:
+        rows.append([InlineKeyboardButton(
+            f"🔔 К повторению ({due})", callback_data="start_due")])
+    rows += [
+        [InlineKeyboardButton("🔤 Неправильные глаголы",     callback_data="type_verbs")],
+        [InlineKeyboardButton("📍 Предлоги in / on / at",    callback_data="type_prep")],
+        [InlineKeyboardButton("➕ Глаголы + to / -ing",      callback_data="type_vp")],
+        [InlineKeyboardButton("🔗 Прилагательные + предлог", callback_data="type_adjprep")],
+        [InlineKeyboardButton("🎲 Всё вперемешку",           callback_data="type_mixed")],
         [
             InlineKeyboardButton("📊 Статистика", callback_data="menu_stats"),
             InlineKeyboardButton("📋 Сложные",    callback_data="menu_weak"),
@@ -240,8 +286,8 @@ def build_type_selector(welcome: bool = False,
             InlineKeyboardButton("📈 История",    callback_data="menu_history"),
             InlineKeyboardButton("❓ Помощь",     callback_data="menu_help"),
         ],
-    ])
-    return text, kb
+    ]
+    return text, InlineKeyboardMarkup(rows)
 
 
 def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -337,15 +383,23 @@ def build_menu_history(user_id: int, back_callback: str = "back_to_types",
     return f"📈 *История сессий:*\n\n{body}", kb
 
 
-def build_menu_help() -> tuple[str, InlineKeyboardMarkup]:
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Главное меню", callback_data="back_to_types")]])
-    return HELP_TEXT, kb
+def build_menu_help(user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    rows: list[list[InlineKeyboardButton]] = []
+    if user_id is not None:
+        try:
+            on = db.get_reminders(user_id)
+        except Exception:
+            on = True
+        label = "🔔 Напоминания: вкл" if on else "🔕 Напоминания: выкл"
+        rows.append([InlineKeyboardButton(label, callback_data="reminders_toggle")])
+    rows.append([InlineKeyboardButton("← Главное меню", callback_data="back_to_types")])
+    return HELP_TEXT, InlineKeyboardMarkup(rows)
 
 
 def build_size_selector(exercise_type: str, type_mode: bool = False,
                         user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    total = len(CONTENT[exercise_type])
-    text  = f"🎯 *{TYPE_LABEL[exercise_type]}*\n\nСколько карточек?"
+    total = len(_mixed_pool()) if exercise_type == "mixed" else len(CONTENT[exercise_type])
+    text  = f"{TYPE_EMOJI.get(exercise_type, '🎯')} *{TYPE_LABEL[exercise_type]}*\n\nСколько карточек?"
     row: list[InlineKeyboardButton] = []
     if total > 10:
         row.append(InlineKeyboardButton("10", callback_data="size_10"))
@@ -354,8 +408,8 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
     row.append(InlineKeyboardButton(f"Все {total}", callback_data="size_all"))
     rows = [row]
 
-    # "Only errors" button — shown when user has weak items for this type
-    if user_id:
+    # "Only errors" button — shown when the user has weak items for this type
+    if user_id and exercise_type in CONTENT:
         try:
             weak_deck = _build_weak_deck(exercise_type, user_id)
             if weak_deck:
@@ -589,9 +643,9 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
     size_label = f"{session['original_total']} {_card_plural(session['original_total'])}"
     subtitle   = f"_{TYPE_LABEL.get(ex_type, '')} · {size_label}_\n\n"
 
-    unknown_ids   = [iid for iid, ok in results.items() if not ok]
+    unknown_keys  = [k for k, ok in results.items() if not ok]
     unknown_block = ""
-    if unknown_ids:
+    if unknown_keys:
         weak_counts: dict = {}
         try:
             _uid = session.get("user_id")
@@ -599,22 +653,23 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
                 weak_counts = db.get_weak_ids(_uid)
         except Exception:
             pass
-        unknown_ids.sort(key=lambda x: weak_counts.get(_stat_key(ex_type, x), 0), reverse=True)
+        unknown_keys.sort(key=lambda k: weak_counts.get(k, 0), reverse=True)
         lines = []
-        for iid in unknown_ids:
-            if ex_type == "verbs" and iid in VERBS_BY_V1:
+        for key in unknown_keys:
+            kind, _, iid = key.partition("::")
+            if kind == "verbs" and iid in VERBS_BY_V1:
                 v = VERBS_BY_V1[iid]
                 if v["v2"] == v["v3"]:
                     lines.append(f"• `{v['v1']}` → `{v['v2']}`")
                 else:
                     lines.append(f"• `{v['v1']}` → `{v['v2']}` / `{v['v3']}`")
-            elif ex_type == "vp" and iid in VP_BY_VERB:
+            elif kind == "vp" and iid in VP_BY_VERB:
                 vp = VP_BY_VERB[iid]
                 lines.append(f"• `{_vp_display(vp)}` + `{vp['pattern']}`")
-            elif ex_type == "adjprep" and iid in ADJ_BY_ADJ:
+            elif kind == "adjprep" and iid in ADJ_BY_ADJ:
                 a = ADJ_BY_ADJ[iid]
                 lines.append(f"• `{a['adjective']}` + `{a['preposition']}`")
-            elif ex_type == "prep" and iid in PREP_BY_SENT:
+            elif kind == "prep" and iid in PREP_BY_SENT:
                 p     = PREP_BY_SENT[iid]
                 short = iid.replace("{?}", f"[{p['answer']}]")
                 lines.append(f"• _{short}_")
@@ -649,17 +704,17 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
 # ─── Session mutations ────────────────────────────────────────────────────────
 
 def mark_known(session: dict, item: dict) -> None:
-    session["results"][item_id(item)] = True
+    session["results"][card_key(item)] = True
 
 
 def mark_unknown(session: dict, item: dict) -> None:
-    iid = item_id(item)
-    session["results"][iid] = False
+    key = card_key(item)
+    session["results"][key] = False
     if session["phase"] != "main":
         return
-    if not any(item_id(v) == iid for v, _ in session["review_buffer"]):
+    if not any(card_key(v) == key for v, _ in session["review_buffer"]):
         session["review_buffer"].append((item, random.randint(2, 3)))
-    if not any(item_id(v) == iid for v in session["end_review"]):
+    if not any(card_key(v) == key for v in session["end_review"]):
         session["end_review"].append(item)
 
 
@@ -695,7 +750,7 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
         await show_results(chat_id, session, bot)
         return
 
-    ex_type = session["exercise_type"]
+    ex_type = item_type(item)          # per-card, so mixed/review decks work
     if ex_type == "verbs":
         text, kb = build_verb_card(session, type_mode=type_mode)
     elif ex_type == "prep":
@@ -707,7 +762,7 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
 
     session["_last_progress"] = progress_line(session, item)
     await safe_edit(bot, chat_id, session["message_id"], text, kb)
-    session["first_shown"].add(item_id(item))
+    session["first_shown"].add(card_key(item))
 
 
 async def show_results(chat_id: int, session: dict, bot) -> None:
@@ -727,8 +782,7 @@ async def show_results(chat_id: int, session: dict, bot) -> None:
         results = session["results"]
         known   = sum(1 for v in results.values() if v)
         unknown = sum(1 for v in results.values() if not v)
-        streak  = db.save_session(user_id, known, unknown, len(results),
-                                  results, session["exercise_type"])
+        streak  = db.save_session(user_id, known, unknown, len(results), results)
 
     text, kb = build_final(session, streak)
     await safe_edit(bot, chat_id, session["message_id"], text, kb)
@@ -830,7 +884,7 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text, kb = build_menu_help()
+    text, kb = build_menu_help(update.effective_user.id)
     await _render_menu(update, context, text, kb)
 
 
@@ -906,8 +960,23 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data == "menu_help":
-        text, kb = build_menu_help()
+        text, kb = build_menu_help(user_id)
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    if data == "reminders_toggle":
+        try:
+            db.set_reminders(user_id, not db.get_reminders(user_id))
+        except Exception:
+            logger.exception("toggle reminders failed for %s", user_id)
+        text, kb = build_menu_help(user_id)
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    if data == "reminders_off":
+        db.set_reminders(user_id, False)
+        await query.answer("🔕 Напоминания отключены. Включить — в разделе «Помощь».",
+                           show_alert=True)
         return
 
     # ── Navigation ──
@@ -954,6 +1023,21 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await show_card(chat_id, session, context.bot, type_mode=type_mode)
         return
 
+    if data == "start_due":
+        deck = _build_review_deck(user_id)
+        if not deck:
+            await query.answer("Сейчас нечего повторять — загляни позже 👍", show_alert=True)
+            return
+        session = new_session("review", deck=deck, user_id=user_id)
+        context.user_data["last_type"] = "review"
+        context.user_data["last_size"] = "review"
+        msg_id = query.message.message_id          # render on the tapped msg (menu or reminder)
+        session["message_id"] = msg_id
+        context.user_data["card_message_id"] = msg_id
+        context.user_data["session"] = session
+        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+        return
+
     if data == "new_session":
         text, kb = build_type_selector(user_id=user_id)
         msg_id   = context.user_data.get("card_message_id") or query.message.message_id
@@ -976,6 +1060,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await query.answer("Ошибок больше нет — отличная работа! 🎉", show_alert=True)
                 return
             session = new_session(ex_type, user_id=user_id, deck=weak_deck)
+        elif last_size == "review":
+            deck = _build_review_deck(user_id)
+            if not deck:
+                await query.answer("Сейчас нечего повторять — загляни позже 👍", show_alert=True)
+                return
+            session = new_session("review", user_id=user_id, deck=deck)
         else:
             size_map = {"10": 10, "20": 20, "all": None}
             session  = new_session(ex_type, size=size_map.get(last_size), user_id=user_id)
@@ -1049,7 +1139,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
 
     elif data == "hint":
-        if session["exercise_type"] != "verbs":
+        if item_type(item) != "verbs":
             return
         prog      = session.get("_last_progress") or progress_line(session, item)
         v2        = item["v2"].split("/")[0]
@@ -1148,6 +1238,33 @@ async def _post_init(app: Application) -> None:
     await app.bot.set_my_commands([])
 
 
+async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Daily nudge: DM users who have due cards and haven't studied today."""
+    try:
+        targets = db.get_reminder_targets()
+    except Exception:
+        logger.exception("Failed to fetch reminder targets")
+        return
+    for uid in targets:
+        try:
+            cnt = db.get_due_count(uid)
+            if not cnt:
+                continue
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🚀 Повторить ({cnt})", callback_data="start_due")],
+                [InlineKeyboardButton("🔕 Отключить", callback_data="reminders_off")],
+            ])
+            await context.bot.send_message(
+                uid,
+                f"🔔 *Пора повторить!*\n\n"
+                f"Готово к повторению: *{cnt}* {_card_plural(cnt)}.\n"
+                f"Несколько минут — и слова закрепятся надолго 💪",
+                parse_mode="Markdown", reply_markup=kb,
+            )
+        except Exception:
+            logger.warning("Reminder to %s failed (blocked/deleted?)", uid)
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log any unhandled exception and, for message updates, notify the user."""
     logger.exception("Unhandled error while processing update", exc_info=context.error)
@@ -1192,6 +1309,16 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_error_handler(on_error)
+
+    # Daily spaced-repetition reminders (opt-out). REMINDER_HOUR is server time.
+    if app.job_queue is not None:
+        import datetime as _dt
+        hour = int(os.environ.get("REMINDER_HOUR", "18"))
+        app.job_queue.run_daily(send_reminders, time=_dt.time(hour=hour))
+        logger.info("Daily reminders scheduled at %02d:00 (server time)", hour)
+    else:
+        logger.warning("JobQueue unavailable — reminders off "
+                       "(needs python-telegram-bot[job-queue])")
 
     logger.info("Bot is running… (state: %s)", state_path)
     app.run_polling(drop_pending_updates=True)
