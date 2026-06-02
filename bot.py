@@ -367,8 +367,9 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
                 a = ADJ_BY_ADJ[iid]
                 lines.append(f"• `{a['adjective']}` + `{a['preposition']}`")
             elif ex_type == "prep" and iid in PREP_BY_SENT:
-                p = PREP_BY_SENT[iid]
-                lines.append(f"• _{iid.replace('{?}', f'[{p[\"answer\"]}]')}_")
+                p     = PREP_BY_SENT[iid]
+                short = iid.replace("{?}", f"[{p['answer']}]")
+                lines.append(f"• _{short}_")
         if lines:
             unknown_block = "\n\n📋 *Повтори:*\n" + "\n".join(lines)
 
