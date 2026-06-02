@@ -142,7 +142,7 @@ def get_lifetime_stats(user_id: int) -> dict:
     }
 
 
-def get_history(user_id: int, limit: int = 5) -> list:
+def get_history(user_id: int, limit: int = 10) -> list:
     with _conn() as c:
         return c.execute("""
             SELECT finished_at, known, unknown, total
