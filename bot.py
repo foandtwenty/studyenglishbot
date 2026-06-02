@@ -50,19 +50,18 @@ def item_id(item: dict) -> str:
 
 
 def _streak_label(n: int) -> str:
-    if n % 10 == 1 and n % 100 != 11:                       return "день"
-    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):      return "дня"
+    if n % 10 == 1 and n % 100 != 11:                  return "день"
+    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return "дня"
     return "дней"
 
 
 def _card_plural(n: int) -> str:
-    if n % 10 == 1 and n % 100 != 11:                       return "карточку"
-    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):      return "карточки"
+    if n % 10 == 1 and n % 100 != 11:                  return "карточку"
+    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return "карточки"
     return "карточек"
 
 
 def _progress_bar(session: dict) -> str:
-    """10-block emoji bar: 🟩 known · 🟥 unknown · ⬜️ remaining."""
     if session.get("phase") == "end_review":
         return ""
     results = session["results"]
@@ -78,19 +77,39 @@ def _progress_bar(session: dict) -> str:
     return "🟩" * k + "🟥" * u + "⬜️" * e
 
 
+def _verb_forms_text(item: dict) -> str:
+    v1, v2, v3 = item["v1"], item["v2"], item["v3"]
+    if v1 == v2 == v3:
+        return f"✅ Все формы одинаковые: `{v1}`"
+    if v2 == v3:
+        return f"*V2 = V3:* `{v2}`"
+    return f"*V2:* `{v2}`\n*V3:* `{v3}`"
+
+
+def _build_weak_deck(exercise_type: str, user_id: int) -> list:
+    weak_ids = db.get_weak_ids(user_id)
+    deck = [(item, weak_ids[item_id(item)]) for item in CONTENT[exercise_type]
+            if item_id(item) in weak_ids]
+    deck.sort(key=lambda x: x[1], reverse=True)
+    return [item for item, _ in deck]
+
+
 # ─── Session ──────────────────────────────────────────────────────────────────
 
 def new_session(exercise_type: str, size: int | None = None,
-                user_id: int | None = None) -> dict:
-    deck = CONTENT[exercise_type].copy()
-    random.shuffle(deck)
-    if size:
-        deck = deck[:size]
+                user_id: int | None = None, deck: list | None = None) -> dict:
+    if deck is not None:
+        d = deck.copy()
+    else:
+        d = CONTENT[exercise_type].copy()
+        random.shuffle(d)
+        if size:
+            d = d[:size]
     return {
         "exercise_type":  exercise_type,
-        "queue":          deck,
+        "queue":          d,
         "pos":            0,
-        "original_total": len(deck),
+        "original_total": len(d),
         "first_shown":    set(),
         "results":        {},
         "review_buffer":  [],
@@ -130,8 +149,21 @@ def progress_line(session: dict, item: dict) -> str:
 
 # ─── Selectors ────────────────────────────────────────────────────────────────
 
-def build_type_selector() -> tuple[str, InlineKeyboardMarkup]:
-    text = "📚 *Что хочешь потренировать?*"
+def build_type_selector(welcome: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+    if welcome:
+        text = (
+            "👋 *Привет! Я Study English Bot.*\n\n"
+            "Тренирую английский через флеш-карточки:\n\n"
+            "🔤 Неправильные глаголы — вспомни все три формы\n"
+            "📍 Предлоги — in, on или at?\n"
+            "➕ Глаголы + to / -ing\n"
+            "🔗 Прилагательные — afraid of, nervous about?\n\n"
+            "Ошибочные карточки возвращаются через 2–3 хода "
+            "и снова в конце — так слова запоминаются лучше.\n\n"
+            "*Выбери тему и начнём!*"
+        )
+    else:
+        text = "📚 *Что хочешь потренировать?*"
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔤 Неправильные глаголы",       callback_data="type_verbs")],
         [InlineKeyboardButton("📍 Предлоги in / on / at",      callback_data="type_prep")],
@@ -141,7 +173,8 @@ def build_type_selector() -> tuple[str, InlineKeyboardMarkup]:
     return text, kb
 
 
-def build_size_selector(exercise_type: str, type_mode: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+def build_size_selector(exercise_type: str, type_mode: bool = False,
+                        user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
     total = len(CONTENT[exercise_type])
     text  = f"🎯 *{TYPE_LABEL[exercise_type]}*\n\nСколько карточек?"
     row   = [InlineKeyboardButton("10", callback_data="size_10")]
@@ -149,6 +182,19 @@ def build_size_selector(exercise_type: str, type_mode: bool = False) -> tuple[st
         row.append(InlineKeyboardButton("20", callback_data="size_20"))
     row.append(InlineKeyboardButton(f"Все {total}", callback_data="size_all"))
     rows = [row]
+
+    # "Only errors" button — shown when user has weak items for this type
+    if user_id:
+        try:
+            weak_deck = _build_weak_deck(exercise_type, user_id)
+            if weak_deck:
+                wc = len(weak_deck)
+                rows.append([InlineKeyboardButton(
+                    f"🎯 Только ошибки ({wc})", callback_data="size_weak"
+                )])
+        except Exception:
+            pass
+
     if exercise_type == "verbs":
         label = "✏️ Режим ввода: вкл ✓" if type_mode else "✏️ Режим ввода: выкл"
         rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
@@ -170,8 +216,9 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
             f"⌨️ Напиши V2 и V3 через пробел:"
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Написать", callback_data="type_answer")],
-            [InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session")],
+            [InlineKeyboardButton("✏️ Написать",  callback_data="type_answer")],
+            [InlineKeyboardButton("💡 Подсказка", callback_data="hint"),
+             InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session")],
         ])
     else:
         text = (
@@ -182,19 +229,19 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
-            [InlineKeyboardButton("⏹ Стоп",            callback_data="stop_session")],
+            [InlineKeyboardButton("💡 Подсказка",      callback_data="hint"),
+             InlineKeyboardButton("⏹ Стоп",            callback_data="stop_session")],
         ])
     return text, kb
 
 
 def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
-    item = current_item(session)
-    prog = session.get("_last_progress") or progress_line(session, item)
-    text = (
+    item  = current_item(session)
+    prog  = session.get("_last_progress") or progress_line(session, item)
+    forms = _verb_forms_text(item)
+    text  = (
         f"{prog}\n\n"
-        f"1️⃣ *V1:* `{item['v1']}`\n"
-        f"2️⃣ *V2:* `{item['v2']}`\n"
-        f"3️⃣ *V3:* `{item['v3']}`\n"
+        f"{forms}\n"
         f"🇷🇺 _{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
     )
@@ -293,7 +340,6 @@ def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, In
             kb_next,
         )
 
-    # verb pattern
     if correct:
         return (
             f"✅ *Верно!*\n\n"
@@ -322,20 +368,17 @@ def build_type_prompt(session: dict) -> tuple[str, InlineKeyboardMarkup]:
 
 
 def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, InlineKeyboardMarkup | None]:
+    forms = _verb_forms_text(item)
     if correct:
         return (
             f"✅ *Верно!*\n\n"
-            f"1️⃣ *V1:* `{item['v1']}`\n"
-            f"2️⃣ *V2:* `{item['v2']}`\n"
-            f"3️⃣ *V3:* `{item['v3']}`\n\n"
+            f"{forms}\n\n"
             f"💬 _{item['example']}_",
             None,
         )
     return (
         f"❌ *Ты написал:* `{user_input}`\n\n"
-        f"1️⃣ *V1:* `{item['v1']}`\n"
-        f"2️⃣ *V2:* `{item['v2']}`\n"
-        f"3️⃣ *V3:* `{item['v3']}`\n"
+        f"{forms}\n"
         f"🇷🇺 _{item['translation']}_\n\n"
         f"💬 _{item['example']}_",
         InlineKeyboardMarkup([
@@ -360,12 +403,12 @@ def build_end_review_intro(count: int) -> tuple[str, InlineKeyboardMarkup]:
 
 
 def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
-    results = session["results"]
-    known   = sum(1 for v in results.values() if v)
-    unknown = sum(1 for v in results.values() if not v)
-    total   = len(results)
-    pct     = round(known / total * 100) if total else 0
-    ex_type = session["exercise_type"]
+    results  = session["results"]
+    known    = sum(1 for v in results.values() if v)
+    unknown  = sum(1 for v in results.values() if not v)
+    total    = len(results)
+    pct      = round(known / total * 100) if total else 0
+    ex_type  = session["exercise_type"]
 
     if pct == 100:   grade = "🏆 Идеально! Ты знаешь всё!"
     elif pct >= 80:  grade = "🌟 Отличный результат!"
@@ -375,6 +418,9 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
 
     streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}* подряд\n" if streak else ""
 
+    size_label = f"{session['original_total']} {_card_plural(session['original_total'])}"
+    subtitle   = f"_{TYPE_LABEL.get(ex_type, '')} · {size_label}_\n\n"
+
     unknown_ids   = [iid for iid, ok in results.items() if not ok]
     unknown_block = ""
     if unknown_ids:
@@ -382,7 +428,10 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
         for iid in sorted(unknown_ids):
             if ex_type == "verbs" and iid in VERBS_BY_V1:
                 v = VERBS_BY_V1[iid]
-                lines.append(f"• `{v['v1']}` → `{v['v2']}` / `{v['v3']}`")
+                if v["v2"] == v["v3"]:
+                    lines.append(f"• `{v['v1']}` → `{v['v2']}`")
+                else:
+                    lines.append(f"• `{v['v1']}` → `{v['v2']}` / `{v['v3']}`")
             elif ex_type == "vp" and iid in VP_BY_VERB:
                 vp = VP_BY_VERB[iid]
                 lines.append(f"• `{vp['verb']}` + `{vp['pattern']}`")
@@ -397,7 +446,8 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
             unknown_block = "\n\n📋 *Повтори:*\n" + "\n".join(lines)
 
     text = (
-        f"🎉 *Сессия завершена!*\n\n"
+        f"🎉 *Сессия завершена!*\n"
+        f"{subtitle}"
         f"✅ Знаю:        *{known}* {_card_plural(known)}\n"
         f"❌ Учу:          *{unknown}* {_card_plural(unknown)}\n"
         f"📊 Результат: *{pct}%*\n"
@@ -406,7 +456,10 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
         f"{unknown_block}"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔁 Начать заново", callback_data="new_session")],
+        [
+            InlineKeyboardButton("🔄 Ещё раз эту же",  callback_data="repeat_session"),
+            InlineKeyboardButton("🏠 Другая тема",      callback_data="new_session"),
+        ],
         [
             InlineKeyboardButton("📋 Сложные карточки", callback_data="final_weak"),
             InlineKeyboardButton("📈 История",           callback_data="final_history"),
@@ -474,7 +527,7 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
     else:
         text, kb = build_vp_card(session)
 
-    session["_last_progress"] = progress_line(session, item)  # save before marking shown
+    session["_last_progress"] = progress_line(session, item)
     session["first_shown"].add(item_id(item))
     await safe_edit(bot, chat_id, session["message_id"], text, kb)
 
@@ -505,14 +558,14 @@ async def show_results(chat_id: int, session: dict, bot) -> None:
 # ─── Command handlers ─────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    db.ensure_user(update.effective_user.id)
+    chat_id  = update.effective_chat.id
+    is_new   = db.ensure_user(update.effective_user.id)
     try:
         await update.message.delete()
     except Exception:
         pass
 
-    text, kb    = build_type_selector()
+    text, kb    = build_type_selector(welcome=is_new)
     card_msg_id = context.user_data.get("card_message_id")
     if card_msg_id:
         try:
@@ -536,9 +589,23 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     streak  = db.get_streak(user_id)
     streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}*\n" if streak else ""
 
+    try:
+        lt = db.get_lifetime_stats(user_id)
+        lifetime_block = (
+            f"\n🏆 *За всё время*\n"
+            f"📚 Карточек пройдено: *{lt['total_cards']}*\n"
+            f"🎓 Освоено: *{lt['mastered']}*\n"
+            f"🎯 Изучается: *{lt['learning']}*\n"
+            f"🗓 Сессий: *{lt['sessions']}*"
+        ) if lt["sessions"] > 0 else ""
+    except Exception:
+        lifetime_block = ""
+
     if not session or not session["results"]:
         await update.message.reply_text(
-            f"Пока нет данных. Начни сессию с /start 🙂\n{streak_line}",
+            f"Пока нет данных. Начни сессию с /start 🙂\n"
+            f"{streak_line}"
+            f"{lifetime_block}",
             parse_mode="Markdown",
         )
         return
@@ -548,15 +615,17 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     unknown = sum(1 for v in results.values() if not v)
     studied = len(results)
     total   = session["original_total"]
+    ex_type = session["exercise_type"]
 
     await update.message.reply_text(
-        f"📊 *Статистика сессии*\n\n"
+        f"📊 *Статистика сессии*\n"
+        f"_{TYPE_LABEL.get(ex_type, '')}_\n\n"
         f"✅ Знаю:           *{known}*\n"
         f"❌ Учу:             *{unknown}*\n"
         f"📚 Пройдено:   *{studied} / {total}*\n"
         f"⏳ Осталось:   *{total - studied}*\n"
-        f"{streak_line}\n"
-        f"_Продолжай, у тебя всё получается!_",
+        f"{streak_line}"
+        f"{lifetime_block}",
         parse_mode="Markdown",
     )
 
@@ -622,15 +691,15 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "➕ Глаголы + to / -ing\n"
         "🔗 Прилагательные + предлог (afraid of...)\n\n"
         "*Как работает:*\n"
-        "Глаголы: сначала вспоминаешь сам, затем нажимаешь «Показать ответ» и честно оцениваешь себя.\n"
-        "Ошибочные карточки возвращаются через 2–3 хода и снова в конце сессии.\n\n"
+        "Сначала вспоминаешь сам, потом смотришь ответ и честно оцениваешь.\n"
+        "Ошибочные карточки возвращаются через 2–3 хода и снова в конце.\n\n"
         "*Команды:*\n"
         "/start — новая сессия\n"
-        "/stats — статистика текущей сессии\n"
+        "/stats — статистика\n"
         "/weak — сложные карточки\n"
         "/history — история сессий\n"
         "/help — эта справка\n\n"
-        "_Режим ввода доступен в меню выбора колоды (только для глаголов)._",
+        "_Режим ввода и тренировка только ошибок доступны в меню выбора колоды._",
         parse_mode="Markdown",
     )
 
@@ -686,22 +755,35 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if data == "toggle_mode":
         context.user_data["type_mode"] = not type_mode
         ex_type = context.user_data.get("pending_type", "verbs")
-        text, kb = build_size_selector(ex_type, type_mode=context.user_data["type_mode"])
+        text, kb = build_size_selector(ex_type, type_mode=context.user_data["type_mode"],
+                                       user_id=user_id)
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
     if data.startswith("type_"):
         ex_type = data[5:]
         context.user_data["pending_type"] = ex_type
-        text, kb = build_size_selector(ex_type, type_mode=type_mode)
+        text, kb = build_size_selector(ex_type, type_mode=type_mode, user_id=user_id)
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
-    if data in ("size_10", "size_20", "size_all"):
-        ex_type  = context.user_data.get("pending_type", "verbs")
-        size_map = {"size_10": 10, "size_20": 20, "size_all": None}
-        session  = new_session(ex_type, size=size_map[data], user_id=user_id)
-        msg_id   = context.user_data.get("card_message_id") or query.message.message_id
+    if data in ("size_10", "size_20", "size_all", "size_weak"):
+        ex_type = context.user_data.get("pending_type", "verbs")
+
+        if data == "size_weak":
+            weak_deck = _build_weak_deck(ex_type, user_id)
+            if not weak_deck:
+                await query.answer("Ошибок пока нет!", show_alert=True)
+                return
+            session = new_session(ex_type, user_id=user_id, deck=weak_deck)
+            context.user_data["last_size"] = "weak"
+        else:
+            size_map = {"size_10": 10, "size_20": 20, "size_all": None}
+            session  = new_session(ex_type, size=size_map[data], user_id=user_id)
+            context.user_data["last_size"] = data[5:]  # "10", "20", "all"
+
+        context.user_data["last_type"] = ex_type
+        msg_id  = context.user_data.get("card_message_id") or query.message.message_id
         session["message_id"] = msg_id
         context.user_data["card_message_id"] = msg_id
         context.user_data["session"] = session
@@ -719,6 +801,23 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
         except BadRequest:
             pass
+        return
+
+    if data == "repeat_session":
+        ex_type   = context.user_data.get("last_type", "verbs")
+        last_size = context.user_data.get("last_size", "all")
+        if last_size == "weak":
+            weak_deck = _build_weak_deck(ex_type, user_id)
+            session   = new_session(ex_type, user_id=user_id,
+                                    deck=weak_deck if weak_deck else None)
+        else:
+            size_map = {"10": 10, "20": 20, "all": None}
+            session  = new_session(ex_type, size=size_map.get(last_size), user_id=user_id)
+        msg_id = context.user_data.get("card_message_id") or query.message.message_id
+        session["message_id"] = msg_id
+        context.user_data["card_message_id"] = msg_id
+        context.user_data["session"] = session
+        await show_card(chat_id, session, context.bot, type_mode=type_mode)
         return
 
     # ── Final screen inline stats ──
@@ -799,6 +898,36 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # ── Verb callbacks ──
     if data == "show":
         text, kb = build_verb_answer(session)
+        await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
+
+    elif data == "hint":
+        prog  = session.get("_last_progress") or progress_line(session, item)
+        v2    = item["v2"].split("/")[0]
+        first = v2[0].lower()
+        if type_mode:
+            text = (
+                f"{prog}\n\n"
+                f"🔤 *{item['v1']}*\n"
+                f"🇷🇺 _{item['translation']}_\n\n"
+                f"💡 V2 начинается на: *{first}...*\n\n"
+                f"⌨️ Напиши V2 и V3 через пробел:"
+            )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✏️ Написать", callback_data="type_answer")],
+                [InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session")],
+            ])
+        else:
+            text = (
+                f"{prog}\n\n"
+                f"🔤 *{item['v1']}*\n"
+                f"🇷🇺 _{item['translation']}_\n\n"
+                f"💡 V2 начинается на: *{first}...*\n\n"
+                f"Вспомни V2 и V3, затем проверь:"
+            )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
+                [InlineKeyboardButton("⏹ Стоп",            callback_data="stop_session")],
+            ])
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
 
     elif data == "knew":

@@ -38,6 +38,20 @@ def init_db() -> None:
         """)
 
 
+def ensure_user(user_id: int) -> bool:
+    """Insert user if not exists. Returns True if user is new."""
+    today = date.today().isoformat()
+    with _conn() as c:
+        existing = c.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,)).fetchone()
+        if existing:
+            return False
+        c.execute(
+            "INSERT INTO users (user_id, streak, last_study, first_seen) VALUES (?,0,NULL,?)",
+            (user_id, today),
+        )
+        return True
+
+
 def save_session(user_id: int, known: int, unknown: int, total: int, results: dict) -> int:
     """Save session results, update verb stats and streak. Returns new streak value."""
     today     = date.today().isoformat()
@@ -48,7 +62,6 @@ def save_session(user_id: int, known: int, unknown: int, total: int, results: di
             "INSERT INTO sessions (user_id, finished_at, known, unknown, total) VALUES (?,?,?,?,?)",
             (user_id, today, known, unknown, total),
         )
-
         for v1, is_known in results.items():
             if is_known:
                 c.execute("""
@@ -65,7 +78,6 @@ def save_session(user_id: int, known: int, unknown: int, total: int, results: di
         if row is None:
             c.execute("INSERT INTO users (user_id, streak, last_study) VALUES (?,1,?)", (user_id, today))
             return 1
-
         streak, last = row["streak"], row["last_study"]
         if last == today:
             return streak
@@ -96,20 +108,55 @@ def get_weak_verbs(user_id: int, limit: int = 10) -> list:
         """, (user_id, limit)).fetchall()
 
 
-def ensure_user(user_id: int) -> None:
-    today = date.today().isoformat()
+def get_weak_ids(user_id: int) -> dict:
+    """Returns {item_id: unknown_count} for all items with any errors."""
     with _conn() as c:
-        c.execute("""
-            INSERT INTO users (user_id, streak, last_study, first_seen)
-            VALUES (?, 0, NULL, ?)
-            ON CONFLICT(user_id) DO NOTHING
-        """, (user_id, today))
+        rows = c.execute(
+            "SELECT verb_v1, unknown_count FROM verb_stats WHERE user_id=? AND unknown_count > 0",
+            (user_id,),
+        ).fetchall()
+    return {r["verb_v1"]: r["unknown_count"] for r in rows}
+
+
+def get_lifetime_stats(user_id: int) -> dict:
+    with _conn() as c:
+        mastered = c.execute("""
+            SELECT COUNT(*) FROM verb_stats
+            WHERE user_id=? AND known_count > unknown_count
+        """, (user_id,)).fetchone()[0]
+        learning = c.execute("""
+            SELECT COUNT(*) FROM verb_stats
+            WHERE user_id=? AND unknown_count >= known_count AND unknown_count > 0
+        """, (user_id,)).fetchone()[0]
+        total_sessions = c.execute(
+            "SELECT COUNT(*) FROM sessions WHERE user_id=?", (user_id,)
+        ).fetchone()[0]
+        total_cards = c.execute(
+            "SELECT COALESCE(SUM(total), 0) FROM sessions WHERE user_id=?", (user_id,)
+        ).fetchone()[0]
+    return {
+        "mastered":     mastered,
+        "learning":     learning,
+        "sessions":     total_sessions,
+        "total_cards":  total_cards,
+    }
+
+
+def get_history(user_id: int, limit: int = 5) -> list:
+    with _conn() as c:
+        return c.execute("""
+            SELECT finished_at, known, unknown, total
+            FROM sessions
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (user_id, limit)).fetchall()
 
 
 def get_admin_stats() -> dict:
-    today      = date.today().isoformat()
-    week_ago   = (date.today() - timedelta(days=7)).isoformat()
-    month_ago  = (date.today() - timedelta(days=30)).isoformat()
+    today     = date.today().isoformat()
+    week_ago  = (date.today() - timedelta(days=7)).isoformat()
+    month_ago = (date.today() - timedelta(days=30)).isoformat()
     with _conn() as c:
         total_users    = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         active_7d      = c.execute(
@@ -122,7 +169,6 @@ def get_admin_stats() -> dict:
         today_sessions = c.execute(
             "SELECT COUNT(*) FROM sessions WHERE finished_at = ?", (today,)
         ).fetchone()[0]
-        # Sessions per day over last 7 days
         daily = c.execute("""
             SELECT finished_at, COUNT(*) as cnt
             FROM sessions
@@ -138,14 +184,3 @@ def get_admin_stats() -> dict:
         "today_sessions": today_sessions,
         "daily":          daily,
     }
-
-
-def get_history(user_id: int, limit: int = 5) -> list:
-    with _conn() as c:
-        return c.execute("""
-            SELECT finished_at, known, unknown, total
-            FROM sessions
-            WHERE user_id = ?
-            ORDER BY id DESC
-            LIMIT ?
-        """, (user_id, limit)).fetchall()
