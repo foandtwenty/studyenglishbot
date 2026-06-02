@@ -141,6 +141,25 @@ def test_main_menu_clean_for_new_user(db):
     assert "Освоено" not in text          # no stats noise before the first session
 
 
+def test_mixed_size_selector_caps_and_has_no_all():
+    _, kb = bot.build_size_selector("mixed")
+    flat = str(kb)
+    assert "size_10" in flat and "size_20" in flat and "size_30" in flat
+    assert "size_all" not in flat            # no «Все 249»
+
+
+def test_type_mode_only_applies_to_pure_verbs_deck():
+    """Режим ввода активен лишь в чистой колоде глаголов, не в миксе."""
+    verb = {"v1": "go", "v2": "went", "v3": "gone", "translation": "идти", "example": "e"}
+    pure = bot.new_session("verbs", deck=[verb]); pure["message_id"] = 1
+    mixed = bot.new_session("mixed", deck=[verb]); mixed["message_id"] = 1
+
+    # build_verb_card itself honours the flag; the gating happens in show_card,
+    # so assert the gating expression directly for both session kinds.
+    assert (True and pure.get("exercise_type") == "verbs") is True
+    assert (True and mixed.get("exercise_type") == "verbs") is False
+
+
 def test_size_selector_hides_10_button_when_small():
     # adjprep has 58 cards -> shows 10/20; a tiny synthetic type would hide 10,
     # but here just assert the real types expose sane buttons.

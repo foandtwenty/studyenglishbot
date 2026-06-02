@@ -445,12 +445,20 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
                         user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
     total = len(_mixed_pool()) if exercise_type == "mixed" else len(CONTENT[exercise_type])
     text  = f"{TYPE_EMOJI.get(exercise_type, '🎯')} *{TYPE_LABEL[exercise_type]}*\n\nСколько карточек?"
-    row: list[InlineKeyboardButton] = []
-    if total > 10:
-        row.append(InlineKeyboardButton("10", callback_data="size_10"))
-    if total >= 20:
-        row.append(InlineKeyboardButton("20", callback_data="size_20"))
-    row.append(InlineKeyboardButton(f"Все {total}", callback_data="size_all"))
+    if exercise_type == "mixed":
+        # The mixed pool is large; offer fixed sizes instead of "Все N".
+        row = [
+            InlineKeyboardButton("10", callback_data="size_10"),
+            InlineKeyboardButton("20", callback_data="size_20"),
+            InlineKeyboardButton("30", callback_data="size_30"),
+        ]
+    else:
+        row = []
+        if total > 10:
+            row.append(InlineKeyboardButton("10", callback_data="size_10"))
+        if total >= 20:
+            row.append(InlineKeyboardButton("20", callback_data="size_20"))
+        row.append(InlineKeyboardButton(f"Все {total}", callback_data="size_all"))
     rows = [row]
 
     # "Only errors" button — shown when the user has weak items for this type
@@ -797,7 +805,8 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
 
     ex_type = item_type(item)          # per-card, so mixed/review decks work
     if ex_type == "verbs":
-        text, kb = build_verb_card(session, type_mode=type_mode)
+        tm = type_mode and session.get("exercise_type") == "verbs"
+        text, kb = build_verb_card(session, type_mode=tm)
     elif ex_type == "prep":
         text, kb = build_prep_card(session)
     elif ex_type == "adjprep":
@@ -1057,7 +1066,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
-    if data in ("size_10", "size_20", "size_all", "size_weak"):
+    if data in ("size_10", "size_20", "size_30", "size_all", "size_weak"):
         ex_type = context.user_data.get("pending_type", "verbs")
 
         if data == "size_weak":
@@ -1068,9 +1077,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             session = new_session(ex_type, user_id=user_id, deck=weak_deck)
             context.user_data["last_size"] = "weak"
         else:
-            size_map = {"size_10": 10, "size_20": 20, "size_all": None}
+            size_map = {"size_10": 10, "size_20": 20, "size_30": 30, "size_all": None}
             session  = new_session(ex_type, size=size_map[data], user_id=user_id)
-            context.user_data["last_size"] = data[5:]  # "10", "20", "all"
+            context.user_data["last_size"] = data[5:]  # "10", "20", "30", "all"
 
         context.user_data["last_type"] = ex_type
         msg_id  = context.user_data.get("card_message_id") or query.message.message_id
@@ -1124,7 +1133,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 return
             session = new_session("review", user_id=user_id, deck=deck)
         else:
-            size_map = {"10": 10, "20": 20, "all": None}
+            size_map = {"10": 10, "20": 20, "30": 30, "all": None}
             session  = new_session(ex_type, size=size_map.get(last_size), user_id=user_id)
         msg_id = context.user_data.get("card_message_id") or query.message.message_id
         session["message_id"] = msg_id
@@ -1198,11 +1207,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif data == "hint":
         if item_type(item) != "verbs":
             return
+        tm        = type_mode and session.get("exercise_type") == "verbs"
         prog      = session.get("_last_progress") or progress_line(session, item)
         v2        = item["v2"].split("/")[0]
         first     = v2[0].lower()
         hint_line = f"💡 V2 начинается на: *{first}...* ({len(v2)} букв)"
-        if type_mode:
+        if tm:
             text = (
                 f"{prog}\n\n"
                 f"🔤 *{item['v1']}*\n"
