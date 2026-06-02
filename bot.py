@@ -62,6 +62,7 @@ HELP_TEXT = (
     "/stats — статистика\n"
     "/weak — сложные карточки\n"
     "/history — история сессий\n"
+    "/mode — переключить режим ввода (для глаголов)\n"
     "/help — эта справка"
 )
 
@@ -107,6 +108,10 @@ def _verb_forms_text(item: dict) -> str:
     if v2 == v3:
         return f"*V2 = V3:* `{v2}`"
     return f"*V2:* `{v2}`\n*V3:* `{v3}`"
+
+
+def _vp_display(item: dict) -> str:
+    return item["verb"].split("  ")[0].strip()
 
 
 def _build_weak_deck(exercise_type: str, user_id: int) -> list:
@@ -177,7 +182,7 @@ def build_type_selector(welcome: bool = False) -> tuple[str, InlineKeyboardMarku
         text = (
             "👋 *Привет! Я Study English Bot.*\n\n"
             "Тренирую английский через флеш-карточки:\n\n"
-            "🔤 Неправильные глаголы — вспомни все три формы\n"
+            "🔤 Неправильные глаголы — вспомни V2 и V3\n"
             "📍 Предлоги — in, on или at?\n"
             "➕ Глаголы + to / -ing\n"
             "🔗 Прилагательные — afraid of, nervous about?\n\n"
@@ -194,7 +199,7 @@ def build_type_selector(welcome: bool = False) -> tuple[str, InlineKeyboardMarku
         [InlineKeyboardButton("🔗 Прилагательные + предлог",   callback_data="type_adjprep")],
         [
             InlineKeyboardButton("📊 Статистика", callback_data="menu_stats"),
-            InlineKeyboardButton("📋 Ошибки",     callback_data="menu_weak"),
+            InlineKeyboardButton("📋 Сложные",    callback_data="menu_weak"),
         ],
         [
             InlineKeyboardButton("📈 История",    callback_data="menu_history"),
@@ -230,10 +235,10 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
         current_block = (
             f"📊 *Текущая сессия*\n"
             f"_{TYPE_LABEL.get(ex_type, '')}_\n\n"
-            f"✅ Знаю:           *{known}*\n"
-            f"❌ Учу:             *{unknown}*\n"
-            f"📚 Пройдено:   *{studied} / {total}*\n"
-            f"⏳ Осталось:   *{total - studied}*\n"
+            f"✅ Знаю: *{known}*\n"
+            f"❌ Учу: *{unknown}*\n"
+            f"📚 Пройдено: *{studied} / {total}*\n"
+            f"⏳ Осталось: *{total - studied}*\n"
             f"{streak_line}"
         )
     else:
@@ -283,7 +288,9 @@ def build_menu_history(user_id: int, back_callback: str = "back_to_types",
             for r in rows:
                 pct = round(r["known"] / r["total"] * 100) if r["total"] else 0
                 lines.append(f"📅 {r['finished_at']} — {r['known']}/{r['total']} ({pct}%)")
-            body = "\n".join(lines) + "\n\n_последние 10 сессий_"
+            body = "\n".join(lines)
+            if len(lines) >= 10:
+                body += "\n\n_показаны последние 10 сессий_"
         else:
             body = "История пуста."
     except Exception:
@@ -340,7 +347,7 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
             f"{prog}\n\n"
             f"🔤 *{item['v1']}*\n"
             f"🇷🇺 _{item['translation']}_\n\n"
-            f"⌨️ Напиши V2 и V3 через пробел:"
+            f"Нажми *Написать*, чтобы ввести V2 и V3:"
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ Написать",  callback_data="type_answer")],
@@ -408,7 +415,7 @@ def build_vp_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     item = current_item(session)
     text = (
         f"{progress_line(session, item)}\n\n"
-        f"🔤 *{item['verb']}*\n"
+        f"🔤 *{_vp_display(item)}*\n"
         f"🇷🇺 _{item['translation']}_\n\n"
         f"Какой шаблон?"
     )
@@ -449,7 +456,7 @@ def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, In
     if "sentence" in item:
         full = item["sentence"].replace("{?}", f"*{item['answer']}*")
         if correct:
-            return f"✅ *Верно!*\n\n{full}\n\n📖 _{item['rule']}_", None
+            return f"✅ *Верно!*\n\n{full}", None
         return (
             f"❌ *Неверно.* Правильный ответ: *{item['answer']}*\n\n"
             f"{full}\n\n📖 _{item['rule']}_",
@@ -462,8 +469,7 @@ def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, In
             return (
                 f"✅ *Верно!*\n\n"
                 f"*{item['adjective']}* + *{item['preposition']}*\n\n"
-                f"💬 _{item['example']}_"
-                f"{rule_line}",
+                f"💬 _{item['example']}_",
                 None,
             )
         return (
@@ -473,18 +479,17 @@ def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, In
             kb_next,
         )
 
-    rule_line = f"\n\n📖 _{item['rule']}_" if item.get("rule") else ""
+    verb_display = _vp_display(item)
+    rule_line    = f"\n\n📖 _{item['rule']}_" if item.get("rule") else ""
     if correct:
         return (
             f"✅ *Верно!*\n\n"
-            f"*{item['verb']}* + *{item['pattern']}*\n\n"
-            f"💬 _{item['example']}_"
-            f"{rule_line}",
+            f"*{verb_display}* + *{item['pattern']}*\n\n"
+            f"💬 _{item['example']}_",
             None,
         )
     return (
-        f"❌ *Неверно.* Правильный ответ: *+ {item['pattern']}*\n\n"
-        f"*{item['verb']}* + *{item['pattern']}*\n"
+        f"❌ *Неверно.* Правильный ответ: *{verb_display} + {item['pattern']}*\n\n"
         f"💬 _{item['example']}_"
         f"{rule_line}",
         kb_next,
@@ -584,7 +589,7 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
                     lines.append(f"• `{v['v1']}` → `{v['v2']}` / `{v['v3']}`")
             elif ex_type == "vp" and iid in VP_BY_VERB:
                 vp = VP_BY_VERB[iid]
-                lines.append(f"• `{vp['verb']}` + `{vp['pattern']}`")
+                lines.append(f"• `{_vp_display(vp)}` + `{vp['pattern']}`")
             elif ex_type == "adjprep" and iid in ADJ_BY_ADJ:
                 a = ADJ_BY_ADJ[iid]
                 lines.append(f"• `{a['adjective']}` + `{a['preposition']}`")
@@ -598,8 +603,8 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
     text = (
         f"🎉 *Сессия завершена!*\n"
         f"{subtitle}"
-        f"✅ Знаю:        *{known}* {_card_plural(known)}\n"
-        f"❌ Учу:          *{unknown}* {_card_plural(unknown)}\n"
+        f"✅ Знаю: *{known}* {_card_plural(known)}\n"
+        f"❌ Учу: *{unknown}* {_card_plural(unknown)}\n"
         f"📊 Результат: *{pct}%*\n"
         f"{streak_line}"
         f"\n{grade}"
@@ -678,8 +683,8 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
         text, kb = build_vp_card(session)
 
     session["_last_progress"] = progress_line(session, item)
-    session["first_shown"].add(item_id(item))
     await safe_edit(bot, chat_id, session["message_id"], text, kb)
+    session["first_shown"].add(item_id(item))
 
 
 async def show_results(chat_id: int, session: dict, bot) -> None:
@@ -734,8 +739,23 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text, _ = build_menu_stats(context.user_data.get("session"), update.effective_user.id)
-    await update.message.reply_text(text, parse_mode="Markdown")
+    chat_id  = update.effective_chat.id
+    text, kb = build_menu_stats(context.user_data.get("session"), update.effective_user.id)
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    card_msg_id = context.user_data.get("card_message_id")
+    if card_msg_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=card_msg_id,
+                text=text, parse_mode="Markdown", reply_markup=kb,
+            )
+            return
+        except BadRequest:
+            pass
+    await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=kb)
 
 
 def _format_weak_item(iid: str, error_count: int) -> str:
@@ -748,7 +768,7 @@ def _format_weak_item(iid: str, error_count: int) -> str:
         return f"• `{iid}` + *{a['preposition']}* — ошибок: {error_count}"
     if iid in VP_BY_VERB:
         vp = VP_BY_VERB[iid]
-        return f"• `{iid}` + *{vp['pattern']}* — ошибок: {error_count}"
+        return f"• `{_vp_display(vp)}` + *{vp['pattern']}* — ошибок: {error_count}"
     short = iid.replace("{?}", "[ ? ]")
     short = short[:50] + "…" if len(short) > 50 else short
     return f"• _{short}_ — ошибок: {error_count}"
@@ -816,7 +836,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if session and session["results"]:
             done  = len(session["results"])
             known = sum(1 for v in session["results"].values() if v)
-            note  = f"_Сессия прервана — {known} из {done} {_card_plural(done)} выполнено_\n\n"
+            note  = f"_Сессия прервана — {known} из {done} {_card_plural(done)} пройдено_\n\n"
             text  = note + text
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
