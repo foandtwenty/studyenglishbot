@@ -38,6 +38,10 @@ CONTENT = {
     "adjprep": ADJ_PREPS,
 }
 
+# Session phases (kept as named constants to avoid stringly-typed comparisons).
+PHASE_MAIN = "main"
+PHASE_END_REVIEW = "end_review"
+
 TYPE_EMOJI = {"verbs": "🔤", "prep": "📍", "vp": "➕", "adjprep": "🔗",
               "mixed": "🎲", "review": "🔔"}
 TYPE_LABEL = {
@@ -122,7 +126,7 @@ def _card_plural(n: int) -> str:
 
 
 def _progress_bar(session: dict) -> str:
-    if session.get("phase") == "end_review":
+    if session.get("phase") == PHASE_END_REVIEW:
         return ""
     results = session["results"]
     total   = session["original_total"]
@@ -233,7 +237,7 @@ _SESSION_DEFAULTS: dict = {
     "first_shown":    set(),
     "review_buffer":  [],
     "end_review":     [],
-    "phase":          "main",
+    "phase":          PHASE_MAIN,
     "message_id":     None,
     "awaiting_input": False,
     "user_id":        None,
@@ -258,7 +262,7 @@ def new_session(exercise_type: str, size: int | None = None,
         "results":        {},
         "review_buffer":  [],
         "end_review":     [],
-        "phase":          "main",
+        "phase":          PHASE_MAIN,
         "message_id":     None,
         "awaiting_input": False,
         "user_id":        user_id,
@@ -291,7 +295,7 @@ def progress_line(session: dict, item: dict) -> str:
     emoji = TYPE_EMOJI.get(item_type(item), "📚")
     bar   = _progress_bar(session)
 
-    if session["phase"] == "end_review":
+    if session["phase"] == PHASE_END_REVIEW:
         pos   = session["pos"] + 1
         total = len(session["queue"])
         return f"🔄 *Повторение {pos} / {total}*"
@@ -811,7 +815,7 @@ def mark_known(session: dict, item: dict) -> None:
 def mark_unknown(session: dict, item: dict) -> None:
     key = card_key(item)
     session["results"][key] = False
-    if session["phase"] != "main":
+    if session["phase"] != PHASE_MAIN:
         return
     if not any(card_key(v) == key for v, _ in session["review_buffer"]):
         session["review_buffer"].append((item, random.randint(2, 3)))
@@ -868,11 +872,11 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
 
 
 async def show_results(chat_id: int, session: dict, bot) -> None:
-    if session["phase"] == "main" and session["end_review"]:
+    if session["phase"] == PHASE_MAIN and session["end_review"]:
         deck = session["end_review"].copy()
         random.shuffle(deck)
         session.update({
-            "phase": "end_review", "queue": deck, "pos": 0, "review_buffer": [],
+            "phase": PHASE_END_REVIEW, "queue": deck, "pos": 0, "review_buffer": [],
         })
         text, kb = build_end_review_intro(len(deck))
         await safe_edit(bot, chat_id, session["message_id"], text, kb)
@@ -1037,7 +1041,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if data == "stop_session":
         session = context.user_data.get("session")
         # Main deck already finished → never discard, finalize & save instead.
-        if session and session.get("phase") == "end_review":
+        if session and session.get("phase") == PHASE_END_REVIEW:
             await show_results(chat_id, session, context.bot)
             return
         session = context.user_data.pop("session", None)

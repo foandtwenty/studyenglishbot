@@ -33,12 +33,14 @@ def test_get_weak_verbs_ordered_by_error_count(db):
 
 def test_lifetime_stats(db):
     db.ensure_user(1)
-    db.save_session(1, 1, 1, 2, {"go": True, "keep": False}, "verbs")
+    for _ in range(5):                      # promote "go" to box 5 -> mastered
+        db.save_session(1, 1, 0, 1, {"verbs::go": True}, None)
+    db.save_session(1, 0, 1, 1, {"verbs::keep": False}, None)   # box 1 -> learning
     lt = db.get_lifetime_stats(1)
-    assert lt["sessions"] == 1
-    assert lt["total_cards"] == 2
-    assert lt["mastered"] == 1     # go: known > unknown
-    assert lt["learning"] == 1     # keep: unknown >= known and unknown > 0
+    assert lt["sessions"] == 6
+    assert lt["total_cards"] == 6
+    assert lt["mastered"] == 1     # box >= 5
+    assert lt["learning"] == 1     # box 1–4
 
 
 def test_history_newest_first(db):

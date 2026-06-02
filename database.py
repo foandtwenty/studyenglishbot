@@ -58,6 +58,10 @@ def init_db() -> None:
                 next_due      TEXT,
                 PRIMARY KEY (user_id, verb_v1)
             );
+            CREATE INDEX IF NOT EXISTS idx_verb_stats_due
+                ON verb_stats (user_id, next_due);
+            CREATE INDEX IF NOT EXISTS idx_sessions_user
+                ON sessions (user_id, id);
         """)
         # Migrations for databases created before these columns existed.
         vcols = {r["name"] for r in c.execute("PRAGMA table_info(verb_stats)")}
@@ -175,15 +179,18 @@ def get_weak_ids(user_id: int) -> dict:
 
 
 def get_lifetime_stats(user_id: int) -> dict:
+    # "Mastered" = reached a long spaced-repetition interval (box ≥ 5, i.e.
+    # 15+ days); "learning" = scheduled but not there yet (box 1–4). This
+    # reflects the Leitner schedule rather than a raw correct/incorrect tally.
     with _conn() as c:
-        mastered = c.execute("""
-            SELECT COUNT(*) FROM verb_stats
-            WHERE user_id=? AND known_count > unknown_count
-        """, (user_id,)).fetchone()[0]
-        learning = c.execute("""
-            SELECT COUNT(*) FROM verb_stats
-            WHERE user_id=? AND unknown_count >= known_count AND unknown_count > 0
-        """, (user_id,)).fetchone()[0]
+        mastered = c.execute(
+            "SELECT COUNT(*) FROM verb_stats WHERE user_id=? AND box >= 5",
+            (user_id,),
+        ).fetchone()[0]
+        learning = c.execute(
+            "SELECT COUNT(*) FROM verb_stats WHERE user_id=? AND box BETWEEN 1 AND 4",
+            (user_id,),
+        ).fetchone()[0]
         total_sessions = c.execute(
             "SELECT COUNT(*) FROM sessions WHERE user_id=?", (user_id,)
         ).fetchone()[0]
