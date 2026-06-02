@@ -2,7 +2,7 @@ import os
 import random
 import logging
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, PicklePersistence,
@@ -55,14 +55,7 @@ HELP_TEXT = (
     "🎯 Только ошибки — тренировка только сложных карточек\n"
     "✏️ Режим ввода — печатать V2 и V3 вместо кнопок\n\n"
     "*На карточке глагола:*\n"
-    "💡 Подсказка — первая буква и длина V2\n\n"
-    "*Команды:*\n"
-    "/start — главное меню\n"
-    "/stats — статистика\n"
-    "/weak — сложные карточки\n"
-    "/history — история сессий\n"
-    "/mode — переключить режим ввода (для глаголов)\n"
-    "/help — эта справка"
+    "💡 Подсказка — первая буква и длина V2"
 )
 
 
@@ -1086,15 +1079,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 async def _post_init(app: Application) -> None:
-    """Register the slash-command menu shown in the Telegram UI."""
-    await app.bot.set_my_commands([
-        BotCommand("start",   "Главное меню"),
-        BotCommand("stats",   "Статистика"),
-        BotCommand("weak",    "Сложные карточки"),
-        BotCommand("history", "История сессий"),
-        BotCommand("mode",    "Режим ввода (для глаголов)"),
-        BotCommand("help",    "Помощь"),
-    ])
+    """Clear the Telegram slash-command menu — the bot is fully button-driven.
+    Command handlers still work as silent fallbacks (e.g. /start), they just
+    aren't advertised in the UI."""
+    await app.bot.set_my_commands([])
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
