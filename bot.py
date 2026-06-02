@@ -94,6 +94,21 @@ def card_key(item: dict) -> str:
     return _stat_key(item_type(item), item_id(item))
 
 
+# ─── Callback routing ───────────────────────────────────────────────────────
+# Dynamic callback families carry an argument as "prefix:arg"; everything else
+# is a static action (arg=None). Separate namespaces make collisions — like the
+# old `type_answer` being swallowed by the `type_<exercise>` matcher —
+# impossible by construction, and make routing a pure, unit-testable function.
+DYNAMIC_PREFIXES = frozenset({"pick", "size", "ans"})
+
+
+def parse_callback(data: str) -> tuple[str, str | None]:
+    prefix, sep, arg = data.partition(":")
+    if sep and prefix in DYNAMIC_PREFIXES:
+        return prefix, arg
+    return data, None
+
+
 def _streak_label(n: int) -> str:
     if n % 10 == 1 and n % 100 != 11:                  return "день"
     if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return "дня"
@@ -284,11 +299,11 @@ def build_type_selector(welcome: bool = False,
         rows.append([InlineKeyboardButton(
             f"🔔 К повторению ({due})", callback_data="start_due")])
     rows += [
-        [InlineKeyboardButton("🔤 Неправильные глаголы",     callback_data="type_verbs")],
-        [InlineKeyboardButton("📍 Предлоги in / on / at",    callback_data="type_prep")],
-        [InlineKeyboardButton("➕ Глаголы + to / -ing",      callback_data="type_vp")],
-        [InlineKeyboardButton("🔗 Прилагательные + предлог", callback_data="type_adjprep")],
-        [InlineKeyboardButton("🎲 Всё вперемешку",           callback_data="type_mixed")],
+        [InlineKeyboardButton("🔤 Неправильные глаголы",     callback_data="pick:verbs")],
+        [InlineKeyboardButton("📍 Предлоги in / on / at",    callback_data="pick:prep")],
+        [InlineKeyboardButton("➕ Глаголы + to / -ing",      callback_data="pick:vp")],
+        [InlineKeyboardButton("🔗 Прилагательные + предлог", callback_data="pick:adjprep")],
+        [InlineKeyboardButton("🎲 Всё вперемешку",           callback_data="pick:mixed")],
         [
             InlineKeyboardButton("📊 Статистика", callback_data="menu_stats"),
             InlineKeyboardButton("📋 Сложные",    callback_data="menu_weak"),
@@ -448,17 +463,17 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
     if exercise_type == "mixed":
         # The mixed pool is large; offer fixed sizes instead of "Все N".
         row = [
-            InlineKeyboardButton("10", callback_data="size_10"),
-            InlineKeyboardButton("20", callback_data="size_20"),
-            InlineKeyboardButton("30", callback_data="size_30"),
+            InlineKeyboardButton("10", callback_data="size:10"),
+            InlineKeyboardButton("20", callback_data="size:20"),
+            InlineKeyboardButton("30", callback_data="size:30"),
         ]
     else:
         row = []
         if total > 10:
-            row.append(InlineKeyboardButton("10", callback_data="size_10"))
+            row.append(InlineKeyboardButton("10", callback_data="size:10"))
         if total >= 20:
-            row.append(InlineKeyboardButton("20", callback_data="size_20"))
-        row.append(InlineKeyboardButton(f"Все {total}", callback_data="size_all"))
+            row.append(InlineKeyboardButton("20", callback_data="size:20"))
+        row.append(InlineKeyboardButton(f"Все {total}", callback_data="size:all"))
     rows = [row]
 
     # "Only errors" button — shown when the user has weak items for this type
@@ -468,7 +483,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
             if weak_deck:
                 wc = len(weak_deck)
                 rows.append([InlineKeyboardButton(
-                    f"🎯 Только ошибки ({wc})", callback_data="size_weak"
+                    f"🎯 Только ошибки ({wc})", callback_data="size:weak"
                 )])
         except Exception:
             pass
@@ -546,9 +561,9 @@ def build_prep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     )
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("in", callback_data="ans_in"),
-            InlineKeyboardButton("on", callback_data="ans_on"),
-            InlineKeyboardButton("at", callback_data="ans_at"),
+            InlineKeyboardButton("in", callback_data="ans:in"),
+            InlineKeyboardButton("on", callback_data="ans:on"),
+            InlineKeyboardButton("at", callback_data="ans:at"),
         ],
         [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
     ])
@@ -565,8 +580,8 @@ def build_vp_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     )
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("+ -ing", callback_data="ans_ing"),
-            InlineKeyboardButton("+ to",   callback_data="ans_to"),
+            InlineKeyboardButton("+ -ing", callback_data="ans:ing"),
+            InlineKeyboardButton("+ to",   callback_data="ans:to"),
         ],
         [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
     ])
@@ -585,7 +600,7 @@ def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"Выбери правильный предлог:"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(opt, callback_data=f"ans_{opt}") for opt in options],
+        [InlineKeyboardButton(opt, callback_data=f"ans:{opt}") for opt in options],
         [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
     ])
     return text, kb
@@ -972,12 +987,13 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ─── Callback handler ─────────────────────────────────────────────────────────
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query     = update.callback_query
+    query        = update.callback_query
     await query.answer()
-    data      = query.data
-    chat_id   = query.message.chat_id
-    user_id   = query.from_user.id
-    type_mode = context.user_data.get("type_mode", False)
+    data         = query.data
+    action, arg  = parse_callback(data)     # ("pick"|"size"|"ans", value) or (data, None)
+    chat_id      = query.message.chat_id
+    user_id      = query.from_user.id
+    type_mode    = context.user_data.get("type_mode", False)
 
     # ── Stop ──
     if data == "stop_session":
@@ -1059,17 +1075,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
-    if data.startswith("type_") and (data[5:] in CONTENT or data[5:] == "mixed"):
-        ex_type = data[5:]
-        context.user_data["pending_type"] = ex_type
-        text, kb = build_size_selector(ex_type, type_mode=type_mode, user_id=user_id)
+    if action == "pick" and (arg in CONTENT or arg == "mixed"):
+        context.user_data["pending_type"] = arg
+        text, kb = build_size_selector(arg, type_mode=type_mode, user_id=user_id)
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
-    if data in ("size_10", "size_20", "size_30", "size_all", "size_weak"):
+    if action == "size":
         ex_type = context.user_data.get("pending_type", "verbs")
 
-        if data == "size_weak":
+        if arg == "weak":
             weak_deck = _build_weak_deck(ex_type, user_id)
             if not weak_deck:
                 await query.answer("Ошибок пока нет!", show_alert=True)
@@ -1077,9 +1092,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             session = new_session(ex_type, user_id=user_id, deck=weak_deck)
             context.user_data["last_size"] = "weak"
         else:
-            size_map = {"size_10": 10, "size_20": 20, "size_30": 30, "size_all": None}
-            session  = new_session(ex_type, size=size_map[data], user_id=user_id)
-            context.user_data["last_size"] = data[5:]  # "10", "20", "30", "all"
+            size_map = {"10": 10, "20": 20, "30": 30, "all": None}
+            session  = new_session(ex_type, size=size_map[arg], user_id=user_id)
+            context.user_data["last_size"] = arg  # "10", "20", "30", "all"
 
         context.user_data["last_type"] = ex_type
         msg_id  = context.user_data.get("card_message_id") or query.message.message_id
@@ -1187,8 +1202,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # ── Multiple-choice answers ──
-    if data.startswith("ans_"):
-        chosen         = data[4:]
+    if action == "ans":
+        chosen         = arg
         correct_answer = item.get("answer") or item.get("pattern") or item.get("preposition")
         correct        = chosen == correct_answer
         text, kb       = build_choice_result(item, chosen, correct)

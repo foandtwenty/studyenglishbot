@@ -99,7 +99,7 @@ def test_main_menu_shows_due_and_mixed(db, fake_date):
     _, kb = bot.build_type_selector(user_id=1)
     flat = str(kb)
     assert "start_due" in flat
-    assert "type_mixed" in flat
+    assert "pick:mixed" in flat
 
 
 def test_due_count_matches_deck_ignoring_orphans(db, monkeypatch):

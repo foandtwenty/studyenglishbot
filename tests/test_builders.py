@@ -43,14 +43,18 @@ def test_type_result_survives_markdown_in_user_input():
         assert text.count("*") % 2 == 0, evil
 
 
-def test_type_answer_callback_not_treated_as_exercise_type():
-    """Regression: 'type_answer' (the Написать button) starts with 'type_' but
-    must NOT be caught by the exercise-type selector, or typing mode crashes."""
-    exercise_cbs = [f"type_{t}" for t in ("verbs", "prep", "vp", "adjprep", "mixed")]
-    for cb in exercise_cbs:
-        assert cb[5:] in bot.CONTENT or cb[5:] == "mixed"
-    # the input button must fail that same guard
-    assert not ("type_answer"[5:] in bot.CONTENT or "type_answer"[5:] == "mixed")
+def test_parse_callback_separates_dynamic_from_static():
+    """Routing is collision-proof by construction: dynamic families parse to
+    (prefix, arg); static actions (incl. the old foot-gun 'type_answer') parse
+    to (data, None) and can never be mistaken for an exercise pick."""
+    assert bot.parse_callback("pick:verbs") == ("pick", "verbs")
+    assert bot.parse_callback("size:30")    == ("size", "30")
+    assert bot.parse_callback("ans:of")     == ("ans", "of")
+    assert bot.parse_callback("type_answer") == ("type_answer", None)
+    assert bot.parse_callback("stop_session") == ("stop_session", None)
+    # a static action never collides with a dynamic family
+    action, arg = bot.parse_callback("type_answer")
+    assert action not in bot.DYNAMIC_PREFIXES
 
 
 def test_sanitize_user_text_strips_specials_and_caps_length():
@@ -144,8 +148,8 @@ def test_main_menu_clean_for_new_user(db):
 def test_mixed_size_selector_caps_and_has_no_all():
     _, kb = bot.build_size_selector("mixed")
     flat = str(kb)
-    assert "size_10" in flat and "size_20" in flat and "size_30" in flat
-    assert "size_all" not in flat            # no «Все 249»
+    assert "size:10" in flat and "size:20" in flat and "size:30" in flat
+    assert "size:all" not in flat            # no «Все 249»
 
 
 def test_type_mode_only_applies_to_pure_verbs_deck():
@@ -165,4 +169,4 @@ def test_size_selector_hides_10_button_when_small():
     # but here just assert the real types expose sane buttons.
     text, kb = bot.build_size_selector("adjprep")
     flat = str(kb)
-    assert "size_10" in flat and "size_20" in flat and "size_all" in flat
+    assert "size:10" in flat and "size:20" in flat and "size:all" in flat
