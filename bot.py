@@ -189,11 +189,12 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
 
 def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     item = current_item(session)
+    prog = session.get("_last_progress") or progress_line(session, item)
     text = (
-        f"{progress_line(session, item)}\n\n"
-        f"📌 *V1:* `{item['v1']}`\n"
-        f"📝 *V2:* `{item['v2']}`\n"
-        f"✅ *V3:* `{item['v3']}`\n"
+        f"{prog}\n\n"
+        f"1️⃣ *V1:* `{item['v1']}`\n"
+        f"2️⃣ *V2:* `{item['v2']}`\n"
+        f"3️⃣ *V3:* `{item['v3']}`\n"
         f"🇷🇺 _{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
     )
@@ -323,17 +324,17 @@ def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, 
     if correct:
         return (
             f"✅ *Верно!*\n\n"
-            f"📌 *V1:* `{item['v1']}`\n"
-            f"📝 *V2:* `{item['v2']}`\n"
-            f"✅ *V3:* `{item['v3']}`\n\n"
+            f"1️⃣ *V1:* `{item['v1']}`\n"
+            f"2️⃣ *V2:* `{item['v2']}`\n"
+            f"3️⃣ *V3:* `{item['v3']}`\n\n"
             f"💬 _{item['example']}_",
             None,
         )
     return (
         f"❌ *Ты написал:* `{user_input}`\n\n"
-        f"📌 *V1:* `{item['v1']}`\n"
-        f"📝 *V2:* `{item['v2']}`\n"
-        f"✅ *V3:* `{item['v3']}`\n"
+        f"1️⃣ *V1:* `{item['v1']}`\n"
+        f"2️⃣ *V2:* `{item['v2']}`\n"
+        f"3️⃣ *V3:* `{item['v3']}`\n"
         f"🇷🇺 _{item['translation']}_\n\n"
         f"💬 _{item['example']}_",
         InlineKeyboardMarkup([
@@ -471,6 +472,7 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
     else:
         text, kb = build_vp_card(session)
 
+    session["_last_progress"] = progress_line(session, item)  # save before marking shown
     session["first_shown"].add(item_id(item))
     await safe_edit(bot, chat_id, session["message_id"], text, kb)
 
