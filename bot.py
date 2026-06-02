@@ -161,12 +161,27 @@ def _mixed_pool() -> list:
     return [item for lst in CONTENT.values() for item in lst]
 
 
+ALL_CARD_KEYS = frozenset(card_key(it) for it in _mixed_pool())
+
+
 def _build_review_deck(user_id: int) -> list:
     """Cards whose spaced-repetition review is due today, across all types."""
     due  = set(db.get_due_ids(user_id))
     deck = [item for item in _mixed_pool() if card_key(item) in due]
     random.shuffle(deck)
     return deck
+
+
+def _due_count(user_id: int | None) -> int:
+    """Due cards that still exist in the current content — matches what tapping
+    «К повторению» actually opens (db.get_due_count may include orphaned keys
+    left over from content edits)."""
+    if not user_id:
+        return 0
+    try:
+        return len(set(db.get_due_ids(user_id)) & ALL_CARD_KEYS)
+    except Exception:
+        return 0
 
 
 def _progress_header(user_id: int | None) -> str:
@@ -264,12 +279,7 @@ def build_type_selector(welcome: bool = False,
         text = (f"{header}\n\n" if header else "") + "📚 *Что хочешь потренировать?*"
 
     rows: list[list[InlineKeyboardButton]] = []
-    due = 0
-    if user_id:
-        try:
-            due = db.get_due_count(user_id)
-        except Exception:
-            due = 0
+    due = _due_count(user_id)
     if due:
         rows.append([InlineKeyboardButton(
             f"🔔 К повторению ({due})", callback_data="start_due")])
@@ -1296,7 +1306,7 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     for uid in targets:
         try:
-            cnt = db.get_due_count(uid)
+            cnt = _due_count(uid)
             if not cnt:
                 continue
             kb = InlineKeyboardMarkup([

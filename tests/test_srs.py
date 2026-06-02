@@ -102,6 +102,24 @@ def test_main_menu_shows_due_and_mixed(db, fake_date):
     assert "type_mixed" in flat
 
 
+def test_due_count_matches_deck_ignoring_orphans(db, monkeypatch):
+    """The «К повторению» badge must equal what start_due actually opens, even
+    when verb_stats holds keys for content that no longer exists."""
+    import datetime as _dt
+    db.ensure_user(1)
+    db.save_session(1, 1, 0, 1, {"verbs::go": True}, None)     # real card
+    db.save_session(1, 0, 1, 1, {"vp::__gone__": False}, None)  # orphaned key
+
+    class FD:
+        @classmethod
+        def today(cls):
+            return _dt.date.today() + _dt.timedelta(days=40)
+    monkeypatch.setattr(db, "date", FD)
+
+    assert db.get_due_count(1) == 2                 # raw rows include the orphan
+    assert bot._due_count(1) == len(bot._build_review_deck(1)) == 1
+
+
 def test_help_reminders_button_present_with_user(db):
     db.ensure_user(1)
     _, kb = bot.build_menu_help(1)
