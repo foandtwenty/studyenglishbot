@@ -311,8 +311,9 @@ def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, In
 
 def build_type_prompt(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     item = current_item(session)
+    prog = session.get("_last_progress") or progress_line(session, item)
     text = (
-        f"{progress_line(session, item)}\n\n"
+        f"{prog}\n\n"
         f"✍️ *{item['v1']}* — _{item['translation']}_\n\n"
         f"Напиши V2 и V3 через пробел:"
     )
@@ -345,9 +346,10 @@ def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, 
 
 
 def build_end_review_intro(count: int) -> tuple[str, InlineKeyboardMarkup]:
+    which = "которая" if count == 1 else "которые"
     text = (
         f"🏁 *Основная колода пройдена!*\n\n"
-        f"Повторим *{count}* {_card_plural(count)}, которые вызвали затруднение.\n\n"
+        f"Повторим *{count}* {_card_plural(count)}, {which} вызвали затруднение.\n\n"
         f"Готов(а)?"
     )
     kb = InlineKeyboardMarkup([
@@ -568,7 +570,8 @@ def _format_weak_item(iid: str, error_count: int) -> str:
     if iid in VP_BY_VERB:
         vp = VP_BY_VERB[iid]
         return f"• `{iid}` + {vp['pattern']} — ошибок: {error_count}"
-    short = iid[:40] + "…" if len(iid) > 40 else iid
+    short = iid.replace("{?}", "[ ? ]")
+    short = short[:50] + "…" if len(short) > 50 else short
     return f"• _{short}_ — ошибок: {error_count}"
 
 
@@ -720,29 +723,35 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # ── Final screen inline stats ──
     if data == "final_weak":
-        rows = db.get_weak_verbs(user_id)
-        body = (
-            "\n".join(_format_weak_item(r["verb_v1"], r["unknown_count"]) for r in rows)
-            if rows else "Данных пока нет — пройди больше сессий!"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Назад к результатам", callback_data="back_to_final")]])
+        kb_back = InlineKeyboardMarkup([[InlineKeyboardButton("← Назад к результатам", callback_data="back_to_final")]])
+        try:
+            rows = db.get_weak_verbs(user_id)
+            body = (
+                "\n".join(_format_weak_item(r["verb_v1"], r["unknown_count"]) for r in rows)
+                if rows else "Данных пока нет — пройди больше сессий!"
+            )
+        except Exception:
+            body = "Не удалось загрузить данные."
         await safe_edit(context.bot, chat_id, query.message.message_id,
-                        f"📋 *Сложные карточки:*\n\n{body}", kb)
+                        f"📋 *Сложные карточки:*\n\n{body}", kb_back)
         return
 
     if data == "final_history":
-        rows = db.get_history(user_id)
-        if rows:
-            lines = []
-            for r in rows:
-                pct = round(r["known"] / r["total"] * 100) if r["total"] else 0
-                lines.append(f"📅 {r['finished_at']} — {r['known']}/{r['total']} ({pct}%)")
-            body = "\n".join(lines)
-        else:
-            body = "История пуста."
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Назад к результатам", callback_data="back_to_final")]])
+        kb_back = InlineKeyboardMarkup([[InlineKeyboardButton("← Назад к результатам", callback_data="back_to_final")]])
+        try:
+            rows = db.get_history(user_id)
+            if rows:
+                lines = []
+                for r in rows:
+                    pct = round(r["known"] / r["total"] * 100) if r["total"] else 0
+                    lines.append(f"📅 {r['finished_at']} — {r['known']}/{r['total']} ({pct}%)")
+                body = "\n".join(lines)
+            else:
+                body = "История пуста."
+        except Exception:
+            body = "Не удалось загрузить данные."
         await safe_edit(context.bot, chat_id, query.message.message_id,
-                        f"📈 *История сессий:*\n\n{body}", kb)
+                        f"📈 *История сессий:*\n\n{body}", kb_back)
         return
 
     if data == "back_to_final":
