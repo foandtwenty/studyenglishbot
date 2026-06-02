@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime state (must live on a persistent volume in production)
+*.db
+*.db-journal
+*.pkl
+bot_state.pkl
+study_english.db
+
+# Local config
+.env

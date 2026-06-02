@@ -2,10 +2,10 @@ import os
 import random
 import logging
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes,
+    MessageHandler, filters, ContextTypes, PicklePersistence,
 )
 from telegram.error import BadRequest
 
@@ -961,6 +961,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not session:
         context.user_data["card_message_id"] = query.message.message_id
         text, kb = build_type_selector()
+        text = "_Активная сессия не найдена — выбери тему заново._\n\n" + text
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
@@ -1084,6 +1085,30 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
+async def _post_init(app: Application) -> None:
+    """Register the slash-command menu shown in the Telegram UI."""
+    await app.bot.set_my_commands([
+        BotCommand("start",   "Главное меню"),
+        BotCommand("stats",   "Статистика"),
+        BotCommand("weak",    "Сложные карточки"),
+        BotCommand("history", "История сессий"),
+        BotCommand("mode",    "Режим ввода (для глаголов)"),
+        BotCommand("help",    "Помощь"),
+    ])
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log any unhandled exception and, for message updates, notify the user."""
+    logger.exception("Unhandled error while processing update", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "⚠️ Что-то пошло не так. Попробуй ещё раз или нажми /start."
+            )
+        except Exception:
+            pass
+
+
 def main() -> None:
     token = os.environ.get("BOT_TOKEN")
     if not token:
@@ -1091,7 +1116,21 @@ def main() -> None:
 
     db.init_db()
 
-    app = Application.builder().token(token).build()
+    # Persist user state (active session, settings) across restarts/redeploys.
+    # Defaults next to the DB so a single mounted volume covers both.
+    state_path = os.environ.get(
+        "STATE_PATH",
+        os.path.join(os.path.dirname(db.DB_PATH) or ".", "bot_state.pkl"),
+    )
+    persistence = PicklePersistence(filepath=state_path)
+
+    app = (
+        Application.builder()
+        .token(token)
+        .persistence(persistence)
+        .post_init(_post_init)
+        .build()
+    )
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("stats",   cmd_stats))
     app.add_handler(CommandHandler("weak",    cmd_weak))
@@ -1101,8 +1140,9 @@ def main() -> None:
     app.add_handler(CommandHandler("admin",   cmd_admin))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_error_handler(on_error)
 
-    logger.info("Bot is running…")
+    logger.info("Bot is running… (state: %s)", state_path)
     app.run_polling(drop_pending_updates=True)
 
 
