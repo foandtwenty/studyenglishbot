@@ -326,7 +326,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 def main() -> None:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    token = os.environ.get("BOT_TOKEN")
     if not token:
         raise RuntimeError("BOT_TOKEN environment variable is not set.")
 
