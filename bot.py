@@ -223,7 +223,7 @@ def build_type_selector(welcome: bool = False) -> tuple[str, InlineKeyboardMarku
 
 def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     streak      = db.get_streak(user_id)
-    streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}* подряд\n" if streak else ""
+    streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}*\n" if streak else ""
     try:
         lt = db.get_lifetime_stats(user_id)
         lifetime_block = (
@@ -244,11 +244,13 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
         studied = len(results)
         total   = session["original_total"]
         ex_type = session["exercise_type"]
+        known_line   = f"✅ Знаю: *{known}*\n" if known else ""
+        unknown_line = f"❌ Ещё учу: *{unknown}*\n" if unknown else ""
         current_block = (
             f"📊 *Текущая сессия*\n"
             f"_{TYPE_LABEL.get(ex_type, '')}_\n\n"
-            f"✅ Знаю: *{known}*\n"
-            f"❌ Учу: *{unknown}*\n"
+            f"{known_line}"
+            f"{unknown_line}"
             f"📚 Пройдено: *{studied} / {total}*\n"
             f"⏳ Осталось: *{total - studied}*\n"
             f"{streak_line}"
@@ -342,7 +344,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
             pass
 
     if exercise_type == "verbs":
-        label = "✏️ Режим ввода: вкл ✓" if type_mode else "✏️ Режим ввода: выкл"
+        label = "✏️ Выключить ввод V2/V3" if type_mode else "✏️ Включить ввод V2/V3"
         rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
     rows.append([InlineKeyboardButton("← Назад", callback_data="back_to_types")])
     return text, InlineKeyboardMarkup(rows)
@@ -371,7 +373,7 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
             f"{prog}\n\n"
             f"🔤 *{item['v1']}*\n"
             f"🇷🇺 _{item['translation']}_\n\n"
-            f"Вспомни V2 и V3, затем проверь:"
+            f"Вспомни формы — потом загляни в ответ:"
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
@@ -559,7 +561,7 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
     elif pct >= 40:  grade = "💪 Не останавливайся, всё получится!"
     else:            grade = "📖 Регулярные повторения — ключ к успеху!"
 
-    streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}* подряд\n" if streak else ""
+    streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}*\n" if streak else ""
 
     size_label = f"{session['original_total']} {_card_plural(session['original_total'])}"
     subtitle   = f"_{TYPE_LABEL.get(ex_type, '')} · {size_label}_\n\n"
@@ -596,11 +598,13 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
         if lines:
             unknown_block = "\n\n📋 *Повтори:*\n" + "\n".join(lines)
 
+    known_line   = f"✅ Знаю: *{known}* {_card_plural(known)}\n" if known else ""
+    unknown_line = f"❌ Ещё учу: *{unknown}* {_card_plural(unknown)}\n" if unknown else ""
     text = (
         f"🎉 *Сессия завершена!*\n"
         f"{subtitle}"
-        f"✅ Знаю: *{known}* {_card_plural(known)}\n"
-        f"❌ Учу: *{unknown}* {_card_plural(unknown)}\n"
+        f"{known_line}"
+        f"{unknown_line}"
         f"📊 Результат: *{pct}%*\n"
         f"{streak_line}"
         f"\n{grade}"
@@ -612,8 +616,8 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("🏠 Другая тема",      callback_data="new_session"),
         ],
         [
-            InlineKeyboardButton("📋 Сложные карточки", callback_data="final_weak"),
-            InlineKeyboardButton("📈 История",           callback_data="final_history"),
+            InlineKeyboardButton("📋 Сложные", callback_data="final_weak"),
+            InlineKeyboardButton("📈 История", callback_data="final_history"),
         ],
     ])
     return text, kb
@@ -1046,7 +1050,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"🔤 *{item['v1']}*\n"
                 f"🇷🇺 _{item['translation']}_\n\n"
                 f"{hint_line}\n\n"
-                f"Вспомни V2 и V3, затем проверь:"
+                f"Вспомни формы — потом загляни в ответ:"
             )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
