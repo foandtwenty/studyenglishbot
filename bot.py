@@ -137,6 +137,7 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
                 InlineKeyboardButton("❌ Не знаю", callback_data="forget"),
             ],
             [InlineKeyboardButton("✏️ Написать V2 и V3", callback_data="type_answer")],
+            [InlineKeyboardButton("⏹ Стоп",              callback_data="stop_session")],
         ])
     else:
         kb = InlineKeyboardMarkup([
@@ -144,7 +145,8 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
                 InlineKeyboardButton("✅ Помню",    callback_data="remember"),
                 InlineKeyboardButton("❌ Не помню", callback_data="forget"),
             ],
-            [InlineKeyboardButton("👁 Показать", callback_data="show")],
+            [InlineKeyboardButton("👁 Показать",   callback_data="show")],
+            [InlineKeyboardButton("⏹ Стоп",        callback_data="stop_session")],
         ])
     return text, kb
 
@@ -158,11 +160,14 @@ def build_prep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"🇷🇺 _{item['translation']}_\n\n"
         f"Выбери правильный предлог:"
     )
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("in",  callback_data="ans_in"),
-        InlineKeyboardButton("on",  callback_data="ans_on"),
-        InlineKeyboardButton("at",  callback_data="ans_at"),
-    ]])
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("in",  callback_data="ans_in"),
+            InlineKeyboardButton("on",  callback_data="ans_on"),
+            InlineKeyboardButton("at",  callback_data="ans_at"),
+        ],
+        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
+    ])
     return text, kb
 
 
@@ -174,10 +179,13 @@ def build_vp_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"🇷🇺 _{item['translation']}_\n\n"
         f"Какой шаблон?"
     )
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("+ -ing", callback_data="ans_ing"),
-        InlineKeyboardButton("+ to",   callback_data="ans_to"),
-    ]])
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("+ -ing", callback_data="ans_ing"),
+            InlineKeyboardButton("+ to",   callback_data="ans_to"),
+        ],
+        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
+    ])
     return text, kb
 
 
@@ -191,10 +199,10 @@ def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"🇷🇺 _{item['translation']}_\n\n"
         f"Выбери правильный предлог:"
     )
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton(opt, callback_data=f"ans_{opt}")
-        for opt in options
-    ]])
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(opt, callback_data=f"ans_{opt}") for opt in options],
+        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
+    ])
     return text, kb
 
 
@@ -627,6 +635,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     type_mode = context.user_data.get("type_mode", False)
 
     # ── Type selector ──
+    if data == "stop_session":
+        context.user_data.pop("session", None)
+        text, kb = build_type_selector()
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
     if data == "back_to_types":
         text, kb = build_type_selector()
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
