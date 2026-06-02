@@ -81,3 +81,16 @@ def test_get_streak_zero_when_stale(db, fake_date):
     db.save_session(1, 1, 0, 1, {"a": True}, "verbs")
     fake_date(_dt.date(2026, 1, 20))      # long gap, no new session
     assert db.get_streak(1) == 0
+
+
+def test_due_respects_user_timezone(db, monkeypatch):
+    """A card due 'today' in the user's local frame is due regardless of where
+    UTC midnight falls."""
+    import datetime as _dt
+    db.ensure_user(1)
+    db.set_tz_offset(1, 5)                        # UTC+5
+    db.save_session(1, 1, 0, 1, {"verbs::go": True}, None)   # box1 -> due in 1 day
+    # Freeze UTC at a moment where local (UTC+5) date is already the due day.
+    base = _dt.datetime.now(_dt.timezone.utc).replace(hour=20, minute=0)
+    monkeypatch.setattr(db, "_now", lambda: base + _dt.timedelta(days=1))
+    assert db.get_due_count(1) >= 1

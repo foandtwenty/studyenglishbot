@@ -26,22 +26,19 @@ def db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fake_date(monkeypatch):
-    """Control database's notion of 'today' for streak tests.
+    """Freeze database's clock for streak/due tests.
 
-    Returns a setter; database.date.today() yields the chosen real date so
-    arithmetic with timedelta keeps working.
+    Returns a setter taking a date; the frozen UTC time is that date at noon
+    (so default tz_offset=0 yields the same calendar day).
     """
-    state = {"today": _dt.date(2026, 1, 10)}
+    def _at(d: _dt.date) -> _dt.datetime:
+        return _dt.datetime(d.year, d.month, d.day, 12, 0, tzinfo=_dt.timezone.utc)
 
-    class _FakeDate:
-        @classmethod
-        def today(cls):
-            return state["today"]
-
-    monkeypatch.setattr(database, "date", _FakeDate)
+    state = {"now": _at(_dt.date(2026, 1, 10))}
+    monkeypatch.setattr(database, "_now", lambda: state["now"])
 
     def _set(d: _dt.date):
-        state["today"] = d
+        state["now"] = _at(d)
 
     return _set
 

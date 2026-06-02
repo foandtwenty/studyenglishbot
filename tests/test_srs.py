@@ -110,11 +110,8 @@ def test_due_count_matches_deck_ignoring_orphans(db, monkeypatch):
     db.save_session(1, 1, 0, 1, {"verbs::go": True}, None)     # real card
     db.save_session(1, 0, 1, 1, {"vp::__gone__": False}, None)  # orphaned key
 
-    class FD:
-        @classmethod
-        def today(cls):
-            return _dt.date.today() + _dt.timedelta(days=40)
-    monkeypatch.setattr(db, "date", FD)
+    future = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=40)
+    monkeypatch.setattr(db, "_now", lambda: future)
 
     assert db.get_due_count(1) == 2                 # raw rows include the orphan
     assert bot._due_count(1) == len(bot._build_review_deck(1)) == 1

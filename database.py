@@ -1,8 +1,21 @@
 import os
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 DB_PATH = os.environ.get("DB_PATH", "study_english.db")
+
+
+def _now() -> datetime:
+    """Current UTC time. Indirected so tests can freeze it."""
+    return datetime.now(timezone.utc)
+
+
+def _user_today(c: sqlite3.Connection, user_id: int) -> date:
+    """The user's local calendar date, derived from their tz_offset, so streaks
+    and due dates respect their midnight rather than the server's."""
+    row = c.execute("SELECT tz_offset FROM users WHERE user_id=?", (user_id,)).fetchone()
+    tz = row["tz_offset"] if row and row["tz_offset"] is not None else 0
+    return (_now() + timedelta(hours=tz)).date()
 
 # Leitner spaced-repetition intervals (box -> days until next review).
 # Correct answer promotes one box (longer interval); a mistake resets to box 1.
@@ -84,11 +97,10 @@ def save_session(user_id: int, known: int, unknown: int, total: int,
     For convenience, pass bare ids plus `exercise_type` and they'll be
     namespaced here (used by tests / single-type callers).
     """
-    today_d   = date.today()
-    today     = today_d.isoformat()
-    yesterday = (today_d - timedelta(days=1)).isoformat()
-
     with _conn() as c:
+        today_d   = _user_today(c, user_id)
+        today     = today_d.isoformat()
+        yesterday = (today_d - timedelta(days=1)).isoformat()
         c.execute(
             "INSERT INTO sessions (user_id, finished_at, known, unknown, total) VALUES (?,?,?,?,?)",
             (user_id, today, known, unknown, total),
@@ -126,8 +138,8 @@ def save_session(user_id: int, known: int, unknown: int, total: int,
 
 
 def get_streak(user_id: int) -> int:
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
     with _conn() as c:
+        yesterday = (_user_today(c, user_id) - timedelta(days=1)).isoformat()
         row = c.execute("SELECT streak, last_study FROM users WHERE user_id=?", (user_id,)).fetchone()
         if not row:
             return 0
@@ -188,8 +200,8 @@ def get_lifetime_stats(user_id: int) -> dict:
 
 def get_due_ids(user_id: int, today: str | None = None) -> list:
     """Namespaced keys of cards whose spaced-repetition review is due."""
-    today = today or date.today().isoformat()
     with _conn() as c:
+        today = today or _user_today(c, user_id).isoformat()
         rows = c.execute(
             "SELECT verb_v1 FROM verb_stats "
             "WHERE user_id=? AND next_due IS NOT NULL AND next_due <= ?",
@@ -199,8 +211,8 @@ def get_due_ids(user_id: int, today: str | None = None) -> list:
 
 
 def get_due_count(user_id: int, today: str | None = None) -> int:
-    today = today or date.today().isoformat()
     with _conn() as c:
+        today = today or _user_today(c, user_id).isoformat()
         return c.execute(
             "SELECT COUNT(*) FROM verb_stats "
             "WHERE user_id=? AND next_due IS NOT NULL AND next_due <= ?",
