@@ -32,6 +32,22 @@ def test_choice_result_shows_answer_on_wrong():
     assert "Неверно" in text and "*in*" in text and "📖" in text
 
 
+def test_type_result_survives_markdown_in_user_input():
+    """Regression: a typed answer with `, _ or * must not unbalance Markdown
+    (which would make Telegram reject the edit and drop user feedback)."""
+    item = {"v1": "go", "v2": "went", "v3": "gone", "translation": "т", "example": "e"}
+    for evil in ["went`gone", "go_went", "a*b went", "`*_[]`"]:
+        text, _ = bot.build_type_result(item, evil, correct=False)
+        assert text.count("`") % 2 == 0, evil
+        assert text.count("_") % 2 == 0, evil
+        assert text.count("*") % 2 == 0, evil
+
+
+def test_sanitize_user_text_strips_specials_and_caps_length():
+    assert bot._sanitize_user_text("a`b*c_d[e]") == "abcde"
+    assert len(bot._sanitize_user_text("x" * 500)) == 100
+
+
 def test_type_result_has_next_button_on_correct():
     item = {"v1": "go", "v2": "went", "v3": "gone", "translation": "т",
             "example": "e"}

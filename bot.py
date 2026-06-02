@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import logging
 
@@ -19,6 +20,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+# httpx logs every request URL at INFO — and the URL embeds the bot token.
+# Keep it at WARNING so the token never lands in logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 VERBS_BY_V1  = {v["v1"]:        v for v in VERBS}
@@ -104,6 +108,12 @@ def _verb_forms_text(item: dict) -> str:
 
 def _vp_display(item: dict) -> str:
     return item["verb"].split("  ")[0].strip()
+
+
+def _sanitize_user_text(s: str) -> str:
+    """Strip Markdown-special chars from echoed user input so a typed answer
+    like ``went`gone`` can't break parse_mode=Markdown (silent BadRequest)."""
+    return re.sub(r"[`*_\[\]]", "", s)[:100]
 
 
 def _stat_key(exercise_type: str, iid: str) -> str:
@@ -502,7 +512,7 @@ def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, 
             kb_next,
         )
     return (
-        f"❌ *Ты написал(а):* `{user_input}`\n\n"
+        f"❌ *Ты написал(а):* `{_sanitize_user_text(user_input)}`\n\n"
         f"{forms}\n"
         f"🇷🇺 _{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
@@ -647,7 +657,7 @@ async def safe_edit(bot, chat_id: int, message_id: int,
 
 async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -> None:
     item = current_item(session)
-    if not item:
+    if item is None:
         await show_results(chat_id, session, bot)
         return
 
@@ -781,16 +791,25 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if context.user_data["type_mode"] else
         "👆 *Режим кнопок включён*"
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Главное меню", callback_data="back_to_types")]])
+    await _render_menu(update, context, msg, kb)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
+    text, kb = build_menu_help()
+    await _render_menu(update, context, text, kb)
+
+
+def _admin_id() -> int | None:
+    try:
+        return int(os.environ["ADMIN_ID"])
+    except (KeyError, ValueError):
+        return None
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    admin_id = int(os.environ.get("ADMIN_ID", 0))
-    if update.effective_user.id != admin_id:
+    admin_id = _admin_id()
+    if admin_id is None or update.effective_user.id != admin_id:
         return
     s     = db.get_admin_stats()
     daily = "\n".join(
@@ -963,7 +982,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     item = current_item(session)
-    if not item:
+    if item is None:
         await show_results(chat_id, session, context.bot)
         return
 
