@@ -13,6 +13,7 @@ from telegram.error import BadRequest
 from verbs import VERBS
 from prepositions import PREPOSITIONS
 from verb_patterns import VERB_PATTERNS
+from adj_preps import ADJ_PREPS
 import database as db
 
 logging.basicConfig(
@@ -21,21 +22,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-VERBS_BY_V1   = {v["v1"]:   v for v in VERBS}
-VP_BY_VERB    = {v["verb"]: v for v in VERB_PATTERNS}
-PREP_BY_SENT  = {p["sentence"]: p for p in PREPOSITIONS}
+VERBS_BY_V1   = {v["v1"]:         v for v in VERBS}
+VP_BY_VERB    = {v["verb"]:       v for v in VERB_PATTERNS}
+PREP_BY_SENT  = {p["sentence"]:   p for p in PREPOSITIONS}
+ADJ_BY_ADJ    = {a["adjective"]:  a for a in ADJ_PREPS}
 
 CONTENT = {
-    "verbs": VERBS,
-    "prep":  PREPOSITIONS,
-    "vp":    VERB_PATTERNS,
+    "verbs":    VERBS,
+    "prep":     PREPOSITIONS,
+    "vp":       VERB_PATTERNS,
+    "adjprep":  ADJ_PREPS,
 }
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def item_id(item: dict) -> str:
-    return item.get("v1") or item.get("verb") or item.get("sentence", "?")
+    return item.get("v1") or item.get("verb") or item.get("adjective") or item.get("sentence", "?")
 
 
 def _streak_label(n: int) -> str:
@@ -98,9 +101,10 @@ def progress_line(session: dict, item: dict) -> str:
 def build_type_selector() -> tuple[str, InlineKeyboardMarkup]:
     text = "📚 *Что хочешь потренировать?*"
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔤 Неправильные глаголы",  callback_data="type_verbs")],
-        [InlineKeyboardButton("📍 Предлоги in / on / at", callback_data="type_prep")],
-        [InlineKeyboardButton("➕ Глаголы + to / -ing",   callback_data="type_vp")],
+        [InlineKeyboardButton("🔤 Неправильные глаголы",       callback_data="type_verbs")],
+        [InlineKeyboardButton("📍 Предлоги in / on / at",      callback_data="type_prep")],
+        [InlineKeyboardButton("➕ Глаголы + to / -ing",        callback_data="type_vp")],
+        [InlineKeyboardButton("🔗 Прилагательные + предлог",   callback_data="type_adjprep")],
     ])
     return text, kb
 
@@ -177,31 +181,64 @@ def build_vp_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     return text, kb
 
 
+def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
+    item    = current_item(session)
+    options = item["options"].copy()
+    random.shuffle(options)
+    text = (
+        f"{progress_line(session, item)}\n\n"
+        f"🔤 *{item['adjective']}* + ?\n"
+        f"🇷🇺 _{item['translation']}_\n\n"
+        f"Выбери правильный предлог:"
+    )
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(opt, callback_data=f"ans_{opt}")
+        for opt in options
+    ]])
+    return text, kb
+
+
 def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, InlineKeyboardMarkup | None]:
+    kb_next = InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Следующая карточка", callback_data="next")]])
+
     if "sentence" in item:
         full = item["sentence"].replace("{?}", f"*{item['answer']}*")
         if correct:
-            text = f"✅ *Верно!*\n\n{full}\n\n📖 _{item['rule']}_"
-            return text, None
-        text = (
+            return f"✅ *Верно!*\n\n{full}\n\n📖 _{item['rule']}_", None
+        return (
             f"❌ *Неверно.* Правильный ответ: *{item['answer']}*\n\n"
-            f"{full}\n\n📖 _{item['rule']}_"
+            f"{full}\n\n📖 _{item['rule']}_",
+            kb_next,
         )
-    else:
+
+    if "adjective" in item:
         if correct:
-            text = (
+            return (
                 f"✅ *Верно!*\n\n"
-                f"*{item['verb']}* + *{item['pattern']}*\n\n"
-                f"💬 _{item['example']}_"
+                f"*{item['adjective']}* + *{item['preposition']}*\n\n"
+                f"💬 _{item['example']}_",
+                None,
             )
-            return text, None
-        text = (
-            f"❌ *Неверно.* Правильный ответ: *+ {item['pattern']}*\n\n"
-            f"*{item['verb']}* + *{item['pattern']}*\n"
-            f"💬 _{item['example']}_"
+        return (
+            f"❌ *Неверно.* Правильный ответ: *{item['adjective']} {item['preposition']}*\n\n"
+            f"💬 _{item['example']}_",
+            kb_next,
         )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Следующая карточка", callback_data="next")]])
-    return text, kb
+
+    # verb pattern
+    if correct:
+        return (
+            f"✅ *Верно!*\n\n"
+            f"*{item['verb']}* + *{item['pattern']}*\n\n"
+            f"💬 _{item['example']}_",
+            None,
+        )
+    return (
+        f"❌ *Неверно.* Правильный ответ: *+ {item['pattern']}*\n\n"
+        f"*{item['verb']}* + *{item['pattern']}*\n"
+        f"💬 _{item['example']}_",
+        kb_next,
+    )
 
 
 def build_verb_answer(session: dict, source: str) -> tuple[str, InlineKeyboardMarkup]:
@@ -295,6 +332,9 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
             elif ex_type == "vp" and iid in VP_BY_VERB:
                 vp = VP_BY_VERB[iid]
                 lines.append(f"• `{vp['verb']}` + `{vp['pattern']}`")
+            elif ex_type == "adjprep" and iid in ADJ_BY_ADJ:
+                a = ADJ_BY_ADJ[iid]
+                lines.append(f"• `{a['adjective']}` + `{a['preposition']}`")
             elif ex_type == "prep" and iid in PREP_BY_SENT:
                 p = PREP_BY_SENT[iid]
                 short = iid.replace("{?}", f"[{p['answer']}]")
@@ -374,6 +414,8 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
         text, kb = build_verb_card(session, type_mode=type_mode)
     elif ex_type == "prep":
         text, kb = build_prep_card(session)
+    elif ex_type == "adjprep":
+        text, kb = build_adjprep_card(session)
     else:
         text, kb = build_vp_card(session)
 
@@ -412,6 +454,8 @@ async def show_results(chat_id: int, session: dict, bot) -> None:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
+
+    db.ensure_user(update.effective_user.id)
 
     # Delete the /start command message to keep chat clean
     try:
@@ -481,6 +525,9 @@ async def cmd_weak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         iid = r["verb_v1"]
         if iid in VERBS_BY_V1:
             label = f"`{iid}` (глагол)"
+        elif iid in ADJ_BY_ADJ:
+            a = ADJ_BY_ADJ[iid]
+            label = f"`{iid}` + {a['preposition']}"
         elif iid in VP_BY_VERB:
             vp = VP_BY_VERB[iid]
             label = f"`{iid}` + {vp['pattern']}"
@@ -493,6 +540,29 @@ async def cmd_weak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📋 *Твои сложные карточки:*\n\n" + "\n".join(lines),
         parse_mode="Markdown",
     )
+
+
+async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    admin_id = int(os.environ.get("ADMIN_ID", 0))
+    if update.effective_user.id != admin_id:
+        return
+
+    s = db.get_admin_stats()
+    daily_lines = "\n".join(
+        f"  {r['finished_at']}: {r['cnt']} сессий"
+        for r in s["daily"]
+    ) or "  нет данных"
+
+    text = (
+        f"📊 *Статистика бота*\n\n"
+        f"👥 Всего пользователей: *{s['total_users']}*\n"
+        f"📅 Активных за 7 дней: *{s['active_7d']}*\n"
+        f"📅 Активных за 30 дней: *{s['active_30d']}*\n"
+        f"🎯 Всего сессий: *{s['total_sessions']}*\n"
+        f"🗓 Сегодня сессий: *{s['today_sessions']}*\n\n"
+        f"📈 *По дням (7 дней):*\n{daily_lines}"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -619,7 +689,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # ── Choice answers (prepositions + verb patterns) ──
     if data.startswith("ans_"):
         chosen  = data[4:]  # "in"/"on"/"at"/"ing"/"to"
-        correct_answer = item.get("answer") or item.get("pattern")
+        correct_answer = item.get("answer") or item.get("pattern") or item.get("preposition")
         correct = chosen == correct_answer
 
         text, kb = build_choice_result(item, chosen, correct)
@@ -730,6 +800,7 @@ def main() -> None:
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("mode",    cmd_mode))
     app.add_handler(CommandHandler("help",    cmd_help))
+    app.add_handler(CommandHandler("admin",   cmd_admin))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 

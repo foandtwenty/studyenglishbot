@@ -17,7 +17,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 user_id    INTEGER PRIMARY KEY,
                 streak     INTEGER DEFAULT 0,
-                last_study TEXT
+                last_study TEXT,
+                first_seen TEXT
             );
             CREATE TABLE IF NOT EXISTS sessions (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,6 +94,50 @@ def get_weak_verbs(user_id: int, limit: int = 10) -> list:
             ORDER BY unknown_count DESC, known_count ASC
             LIMIT ?
         """, (user_id, limit)).fetchall()
+
+
+def ensure_user(user_id: int) -> None:
+    today = date.today().isoformat()
+    with _conn() as c:
+        c.execute("""
+            INSERT INTO users (user_id, streak, last_study, first_seen)
+            VALUES (?, 0, NULL, ?)
+            ON CONFLICT(user_id) DO NOTHING
+        """, (user_id, today))
+
+
+def get_admin_stats() -> dict:
+    today      = date.today().isoformat()
+    week_ago   = (date.today() - timedelta(days=7)).isoformat()
+    month_ago  = (date.today() - timedelta(days=30)).isoformat()
+    with _conn() as c:
+        total_users    = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        active_7d      = c.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM sessions WHERE finished_at >= ?", (week_ago,)
+        ).fetchone()[0]
+        active_30d     = c.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM sessions WHERE finished_at >= ?", (month_ago,)
+        ).fetchone()[0]
+        total_sessions = c.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        today_sessions = c.execute(
+            "SELECT COUNT(*) FROM sessions WHERE finished_at = ?", (today,)
+        ).fetchone()[0]
+        # Sessions per day over last 7 days
+        daily = c.execute("""
+            SELECT finished_at, COUNT(*) as cnt
+            FROM sessions
+            WHERE finished_at >= ?
+            GROUP BY finished_at
+            ORDER BY finished_at DESC
+        """, (week_ago,)).fetchall()
+    return {
+        "total_users":    total_users,
+        "active_7d":      active_7d,
+        "active_30d":     active_30d,
+        "total_sessions": total_sessions,
+        "today_sessions": today_sessions,
+        "daily":          daily,
+    }
 
 
 def get_history(user_id: int, limit: int = 5) -> list:
