@@ -52,8 +52,13 @@ def ensure_user(user_id: int) -> bool:
         return True
 
 
-def save_session(user_id: int, known: int, unknown: int, total: int, results: dict) -> int:
-    """Save session results, update verb stats and streak. Returns new streak value."""
+def save_session(user_id: int, known: int, unknown: int, total: int,
+                 results: dict, exercise_type: str) -> int:
+    """Save session results, update item stats and streak. Returns new streak value.
+
+    Item stats are keyed as "<exercise_type>::<item_id>" so the same word in
+    different exercises (e.g. verb "keep" vs pattern "keep") never collide.
+    """
     today     = date.today().isoformat()
     yesterday = (date.today() - timedelta(days=1)).isoformat()
 
@@ -62,21 +67,23 @@ def save_session(user_id: int, known: int, unknown: int, total: int, results: di
             "INSERT INTO sessions (user_id, finished_at, known, unknown, total) VALUES (?,?,?,?,?)",
             (user_id, today, known, unknown, total),
         )
-        for v1, is_known in results.items():
+        for iid, is_known in results.items():
+            key = f"{exercise_type}::{iid}"
             if is_known:
                 c.execute("""
                     INSERT INTO verb_stats (user_id, verb_v1, known_count, unknown_count) VALUES (?,?,1,0)
                     ON CONFLICT(user_id, verb_v1) DO UPDATE SET known_count = known_count + 1
-                """, (user_id, v1))
+                """, (user_id, key))
             else:
                 c.execute("""
                     INSERT INTO verb_stats (user_id, verb_v1, known_count, unknown_count) VALUES (?,?,0,1)
                     ON CONFLICT(user_id, verb_v1) DO UPDATE SET unknown_count = unknown_count + 1
-                """, (user_id, v1))
+                """, (user_id, key))
 
         row = c.execute("SELECT streak, last_study FROM users WHERE user_id=?", (user_id,)).fetchone()
         if row is None:
-            c.execute("INSERT INTO users (user_id, streak, last_study) VALUES (?,1,?)", (user_id, today))
+            c.execute("INSERT INTO users (user_id, streak, last_study, first_seen) VALUES (?,1,?,?)",
+                      (user_id, today, today))
             return 1
         streak, last = row["streak"], row["last_study"]
         if last == today:
@@ -97,7 +104,12 @@ def get_streak(user_id: int) -> int:
         return row["streak"]
 
 
-def get_weak_verbs(user_id: int, limit: int = 10) -> list:
+def get_weak_verbs(user_id: int, limit: int = 100) -> list:
+    """Weak items across all exercises, ordered by error count.
+
+    Keys are "<exercise_type>::<item_id>". The caller groups by type and may
+    cap per category, so the default limit is high (effectively all).
+    """
     with _conn() as c:
         return c.execute("""
             SELECT verb_v1, unknown_count, known_count
@@ -109,7 +121,7 @@ def get_weak_verbs(user_id: int, limit: int = 10) -> list:
 
 
 def get_weak_ids(user_id: int) -> dict:
-    """Returns {item_id: unknown_count} for all items with any errors."""
+    """Returns {"<exercise_type>::<item_id>": unknown_count} for items with errors."""
     with _conn() as c:
         rows = c.execute(
             "SELECT verb_v1, unknown_count FROM verb_stats WHERE user_id=? AND unknown_count > 0",

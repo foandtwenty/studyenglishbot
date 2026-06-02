@@ -1,4 +1,3 @@
-import asyncio
 import os
 import random
 import logging
@@ -114,10 +113,17 @@ def _vp_display(item: dict) -> str:
     return item["verb"].split("  ")[0].strip()
 
 
+def _stat_key(exercise_type: str, iid: str) -> str:
+    return f"{exercise_type}::{iid}"
+
+
 def _build_weak_deck(exercise_type: str, user_id: int) -> list:
     weak_ids = db.get_weak_ids(user_id)
-    deck = [(item, weak_ids[item_id(item)]) for item in CONTENT[exercise_type]
-            if item_id(item) in weak_ids]
+    deck = []
+    for item in CONTENT[exercise_type]:
+        key = _stat_key(exercise_type, item_id(item))
+        if key in weak_ids:
+            deck.append((item, weak_ids[key]))
     deck.sort(key=lambda x: x[1], reverse=True)
     return [item for item, _ in deck]
 
@@ -252,26 +258,19 @@ def build_menu_weak(user_id: int, back_callback: str = "back_to_types",
                     back_label: str = "← Главное меню") -> tuple[str, InlineKeyboardMarkup]:
     try:
         rows = db.get_weak_verbs(user_id)
-        if not rows:
-            body = "Пока нет данных. Пройди хотя бы одну сессию до конца! 📚"
-        else:
-            groups: dict[str, list] = {"verbs": [], "vp": [], "adjprep": [], "prep": []}
-            for r in rows:
-                iid, cnt = r["verb_v1"], r["unknown_count"]
-                if iid in VERBS_BY_V1:
-                    groups["verbs"].append((iid, cnt))
-                elif iid in VP_BY_VERB:
-                    groups["vp"].append((iid, cnt))
-                elif iid in ADJ_BY_ADJ:
-                    groups["adjprep"].append((iid, cnt))
-                else:
-                    groups["prep"].append((iid, cnt))
-            lines: list[str] = []
-            for ex_type in ("verbs", "vp", "adjprep", "prep"):
-                if groups[ex_type]:
-                    lines.append(f"\n{TYPE_EMOJI[ex_type]} *{TYPE_LABEL[ex_type]}*")
-                    lines.extend(_format_weak_item(iid, cnt) for iid, cnt in groups[ex_type])
-            body = "\n".join(lines)
+        groups: dict[str, list] = {"verbs": [], "vp": [], "adjprep": [], "prep": []}
+        for r in rows:
+            ex_type, sep, iid = r["verb_v1"].partition("::")
+            if sep and ex_type in groups:          # skip legacy un-namespaced rows
+                groups[ex_type].append((iid, r["unknown_count"]))
+        lines: list[str] = []
+        for ex_type in ("verbs", "vp", "adjprep", "prep"):
+            if groups[ex_type]:
+                lines.append(f"\n{TYPE_EMOJI[ex_type]} *{TYPE_LABEL[ex_type]}*")
+                lines.extend(_format_weak_item(ex_type, iid, cnt)
+                             for iid, cnt in groups[ex_type][:10])
+        body = "\n".join(lines) if lines else \
+            "Пока нет данных. Пройди хотя бы одну сессию до конца! 📚"
     except Exception:
         logger.exception("Failed to load weak items for user %s", user_id)
         body = "Не удалось загрузить данные."
@@ -447,49 +446,35 @@ def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     return text, kb
 
 
-def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, InlineKeyboardMarkup | None]:
+def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, InlineKeyboardMarkup]:
     kb_next = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➡️ Следующая карточка", callback_data="next")],
-        [InlineKeyboardButton("⏹ Стоп",               callback_data="stop_session")],
+        [InlineKeyboardButton("➡️ Дальше", callback_data="next")],
+        [InlineKeyboardButton("⏹ Стоп",   callback_data="stop_session")],
     ])
+    head = "✅ *Верно!*" if correct else "❌ *Неверно.*"
 
     if "sentence" in item:
-        full = item["sentence"].replace("{?}", f"*{item['answer']}*")
-        if correct:
-            return f"✅ *Верно!*\n\n{full}", None
-        return (
-            f"❌ *Неверно.* Правильный ответ: *{item['answer']}*\n\n"
-            f"{full}\n\n📖 _{item['rule']}_",
-            kb_next,
-        )
+        full      = item["sentence"].replace("{?}", f"*{item['answer']}*")
+        wrong_ans = "" if correct else f" Правильный ответ: *{item['answer']}*"
+        return f"{head}{wrong_ans}\n\n{full}\n\n📖 _{item['rule']}_", kb_next
+
+    rule_line = f"\n\n📖 _{item['rule']}_" if item.get("rule") else ""
 
     if "adjective" in item:
-        rule_line = f"\n\n📖 _{item['rule']}_" if item.get("rule") else ""
-        if correct:
-            return (
-                f"✅ *Верно!*\n\n"
-                f"*{item['adjective']}* + *{item['preposition']}*\n\n"
-                f"💬 _{item['example']}_",
-                None,
-            )
+        wrong_ans = "" if correct else f" Правильный ответ: *{item['adjective']} {item['preposition']}*"
         return (
-            f"❌ *Неверно.* Правильный ответ: *{item['adjective']} {item['preposition']}*\n\n"
+            f"{head}{wrong_ans}\n\n"
+            f"*{item['adjective']}* + *{item['preposition']}*\n\n"
             f"💬 _{item['example']}_"
             f"{rule_line}",
             kb_next,
         )
 
     verb_display = _vp_display(item)
-    rule_line    = f"\n\n📖 _{item['rule']}_" if item.get("rule") else ""
-    if correct:
-        return (
-            f"✅ *Верно!*\n\n"
-            f"*{verb_display}* + *{item['pattern']}*\n\n"
-            f"💬 _{item['example']}_",
-            None,
-        )
+    wrong_ans    = "" if correct else f" Правильный ответ: *{verb_display} + {item['pattern']}*"
     return (
-        f"❌ *Неверно.* Правильный ответ: *{verb_display} + {item['pattern']}*\n\n"
+        f"{head}{wrong_ans}\n\n"
+        f"*{verb_display}* + *{item['pattern']}*\n\n"
         f"💬 _{item['example']}_"
         f"{rule_line}",
         kb_next,
@@ -508,16 +493,20 @@ def build_type_prompt(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     return text, kb
 
 
-def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, InlineKeyboardMarkup | None]:
+def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, InlineKeyboardMarkup]:
     forms     = _verb_forms_text(item)
     note_line = f"\n\n📖 _{item['note']}_" if item.get("note") else ""
+    kb_next   = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➡️ Дальше", callback_data="next")],
+        [InlineKeyboardButton("⏹ Стоп",   callback_data="stop_session")],
+    ])
     if correct:
         return (
             f"✅ *Верно!*\n\n"
             f"{forms}\n\n"
             f"💬 _{item['example']}_"
             f"{note_line}",
-            None,
+            kb_next,
         )
     return (
         f"❌ *Ты написал(а):* `{user_input}`\n\n"
@@ -525,10 +514,7 @@ def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, 
         f"🇷🇺 _{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
         f"{note_line}",
-        InlineKeyboardMarkup([
-            [InlineKeyboardButton("➡️ Следующая карточка", callback_data="next")],
-            [InlineKeyboardButton("⏹ Стоп",               callback_data="stop_session")],
-        ]),
+        kb_next,
     )
 
 
@@ -578,7 +564,7 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
                 weak_counts = db.get_weak_ids(_uid)
         except Exception:
             pass
-        unknown_ids.sort(key=lambda x: weak_counts.get(x, 0), reverse=True)
+        unknown_ids.sort(key=lambda x: weak_counts.get(_stat_key(ex_type, x), 0), reverse=True)
         lines = []
         for iid in unknown_ids:
             if ex_type == "verbs" and iid in VERBS_BY_V1:
@@ -704,7 +690,8 @@ async def show_results(chat_id: int, session: dict, bot) -> None:
         results = session["results"]
         known   = sum(1 for v in results.values() if v)
         unknown = sum(1 for v in results.values() if not v)
-        streak  = db.save_session(user_id, known, unknown, len(results), results)
+        streak  = db.save_session(user_id, known, unknown, len(results),
+                                  results, session["exercise_type"])
 
     text, kb = build_final(session, streak)
     await safe_edit(bot, chat_id, session["message_id"], text, kb)
@@ -738,9 +725,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["card_message_id"] = msg.message_id
 
 
-async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id  = update.effective_chat.id
-    text, kb = build_menu_stats(context.user_data.get("session"), update.effective_user.id)
+async def _render_menu(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                       text: str, kb: InlineKeyboardMarkup) -> None:
+    """Render a menu screen onto the single card message, deleting the command."""
+    chat_id = update.effective_chat.id
     try:
         await update.message.delete()
     except Exception:
@@ -755,18 +743,26 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         except BadRequest:
             pass
-    await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=kb)
+    msg = await context.bot.send_message(
+        chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=kb,
+    )
+    context.user_data["card_message_id"] = msg.message_id
 
 
-def _format_weak_item(iid: str, error_count: int) -> str:
-    if iid in VERBS_BY_V1:
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text, kb = build_menu_stats(context.user_data.get("session"), update.effective_user.id)
+    await _render_menu(update, context, text, kb)
+
+
+def _format_weak_item(ex_type: str, iid: str, error_count: int) -> str:
+    if ex_type == "verbs" and iid in VERBS_BY_V1:
         v = VERBS_BY_V1[iid]
         forms = f"`{v['v2']}`" if v["v2"] == v["v3"] else f"`{v['v2']}` / `{v['v3']}`"
         return f"• `{iid}` → {forms} — ошибок: {error_count}"
-    if iid in ADJ_BY_ADJ:
+    if ex_type == "adjprep" and iid in ADJ_BY_ADJ:
         a = ADJ_BY_ADJ[iid]
         return f"• `{iid}` + *{a['preposition']}* — ошибок: {error_count}"
-    if iid in VP_BY_VERB:
+    if ex_type == "vp" and iid in VP_BY_VERB:
         vp = VP_BY_VERB[iid]
         return f"• `{_vp_display(vp)}` + *{vp['pattern']}* — ошибок: {error_count}"
     short = iid.replace("{?}", "[ ? ]")
@@ -775,13 +771,13 @@ def _format_weak_item(iid: str, error_count: int) -> str:
 
 
 async def cmd_weak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text, _ = build_menu_weak(update.effective_user.id)
-    await update.message.reply_text(text, parse_mode="Markdown")
+    text, kb = build_menu_weak(update.effective_user.id)
+    await _render_menu(update, context, text, kb)
 
 
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text, _ = build_menu_history(update.effective_user.id)
-    await update.message.reply_text(text, parse_mode="Markdown")
+    text, kb = build_menu_history(update.effective_user.id)
+    await _render_menu(update, context, text, kb)
 
 
 async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -985,13 +981,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text, kb       = build_choice_result(item, chosen, correct)
         if correct:
             mark_known(session, item)
-            await safe_edit(context.bot, chat_id, session["message_id"], text, InlineKeyboardMarkup([]))
-            await asyncio.sleep(1.2)
-            advance(session)
-            await show_card(chat_id, session, context.bot, type_mode=type_mode)
         else:
             mark_unknown(session, item)
-            await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
+        await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
         return
 
     # ── Verb callbacks ──
@@ -1012,7 +1004,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"🔤 *{item['v1']}*\n"
                 f"🇷🇺 _{item['translation']}_\n\n"
                 f"{hint_line}\n\n"
-                f"⌨️ Напиши V2 и V3 через пробел:"
+                f"Нажми *Написать*, чтобы ввести V2 и V3:"
             )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✏️ Написать", callback_data="type_answer")],
@@ -1082,19 +1074,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text, kb = build_type_result(item, raw, correct)
     if correct:
         mark_known(session, item)
-        try:
-            await safe_edit(context.bot, chat_id, session["message_id"], text, InlineKeyboardMarkup([]))
-        except BadRequest:
-            pass
-        await asyncio.sleep(1.5)
-        advance(session)
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
     else:
         mark_unknown(session, item)
-        try:
-            await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
-        except BadRequest:
-            pass
+    try:
+        await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
+    except BadRequest:
+        pass
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
