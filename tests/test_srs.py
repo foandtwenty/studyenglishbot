@@ -102,9 +102,33 @@ def test_main_menu_shows_due_and_mixed(db, fake_date):
     assert "type_mixed" in flat
 
 
-def test_help_reminder_toggle_present_with_user(db):
+def test_help_reminders_button_present_with_user(db):
     db.ensure_user(1)
     _, kb = bot.build_menu_help(1)
-    assert "reminders_toggle" in str(kb)
+    assert "menu_reminders" in str(kb)
     _, kb2 = bot.build_menu_help()
-    assert "reminders_toggle" not in str(kb2)
+    assert "menu_reminders" not in str(kb2)
+
+
+def test_reminder_settings_screen_steppers(db):
+    db.ensure_user(1)
+    text, kb = bot.build_reminder_settings(1)
+    flat = str(kb)
+    assert "18:00" in text and "UTC" in text          # default time shown
+    for cb in ("rem_hour_inc", "rem_hour_dec", "rem_tz_inc", "rem_tz_dec", "rem_toggle"):
+        assert cb in flat
+
+
+def test_reminder_settings_hour_wraps(db):
+    db.ensure_user(1)
+    db.set_reminder_hour(1, 23)
+    db.set_reminder_hour(1, db.get_reminder_settings(1)["hour"] + 1)   # 24 -> 0
+    assert db.get_reminder_settings(1)["hour"] == 0
+
+
+def test_tz_offset_clamped(db):
+    db.ensure_user(1)
+    db.set_tz_offset(1, 99)
+    assert db.get_reminder_settings(1)["tz"] == 14
+    db.set_tz_offset(1, -99)
+    assert db.get_reminder_settings(1)["tz"] == -12

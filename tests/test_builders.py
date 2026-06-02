@@ -43,6 +43,16 @@ def test_type_result_survives_markdown_in_user_input():
         assert text.count("*") % 2 == 0, evil
 
 
+def test_type_answer_callback_not_treated_as_exercise_type():
+    """Regression: 'type_answer' (the Написать button) starts with 'type_' but
+    must NOT be caught by the exercise-type selector, or typing mode crashes."""
+    exercise_cbs = [f"type_{t}" for t in ("verbs", "prep", "vp", "adjprep", "mixed")]
+    for cb in exercise_cbs:
+        assert cb[5:] in bot.CONTENT or cb[5:] == "mixed"
+    # the input button must fail that same guard
+    assert not ("type_answer"[5:] in bot.CONTENT or "type_answer"[5:] == "mixed")
+
+
 def test_sanitize_user_text_strips_specials_and_caps_length():
     assert bot._sanitize_user_text("a`b*c_d[e]") == "abcde"
     assert len(bot._sanitize_user_text("x" * 500)) == 100

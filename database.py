@@ -20,11 +20,13 @@ def init_db() -> None:
     with _conn() as c:
         c.executescript("""
             CREATE TABLE IF NOT EXISTS users (
-                user_id    INTEGER PRIMARY KEY,
-                streak     INTEGER DEFAULT 0,
-                last_study TEXT,
-                first_seen TEXT,
-                reminders  INTEGER DEFAULT 1
+                user_id       INTEGER PRIMARY KEY,
+                streak        INTEGER DEFAULT 0,
+                last_study    TEXT,
+                first_seen    TEXT,
+                reminders     INTEGER DEFAULT 1,
+                reminder_hour INTEGER DEFAULT 18,
+                tz_offset     INTEGER DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS sessions (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,6 +55,10 @@ def init_db() -> None:
         ucols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
         if "reminders" not in ucols:
             c.execute("ALTER TABLE users ADD COLUMN reminders INTEGER DEFAULT 1")
+        if "reminder_hour" not in ucols:
+            c.execute("ALTER TABLE users ADD COLUMN reminder_hour INTEGER DEFAULT 18")
+        if "tz_offset" not in ucols:
+            c.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER DEFAULT 0")
 
 
 def ensure_user(user_id: int) -> bool:
@@ -202,18 +208,27 @@ def get_due_count(user_id: int, today: str | None = None) -> int:
         ).fetchone()[0]
 
 
-def get_reminder_targets(today: str | None = None) -> list:
-    """User ids who opted into reminders, have due cards, and haven't studied today."""
+def get_reminder_targets(today: str | None = None, utc_hour: int | None = None) -> list:
+    """User ids who opted into reminders, have due cards, and haven't studied today.
+
+    If `utc_hour` is given, only users whose personal reminder time falls on
+    that UTC hour are returned (local reminder_hour shifted by tz_offset).
+    """
     today = today or date.today().isoformat()
+    sql = """
+        SELECT DISTINCT u.user_id
+        FROM users u
+        JOIN verb_stats v ON v.user_id = u.user_id
+        WHERE u.reminders = 1
+          AND v.next_due IS NOT NULL AND v.next_due <= ?
+          AND (u.last_study IS NULL OR u.last_study < ?)
+    """
+    params: list = [today, today]
+    if utc_hour is not None:
+        sql += " AND ((u.reminder_hour - u.tz_offset) % 24 + 24) % 24 = ?"
+        params.append(utc_hour)
     with _conn() as c:
-        rows = c.execute("""
-            SELECT DISTINCT u.user_id
-            FROM users u
-            JOIN verb_stats v ON v.user_id = u.user_id
-            WHERE u.reminders = 1
-              AND v.next_due IS NOT NULL AND v.next_due <= ?
-              AND (u.last_study IS NULL OR u.last_study < ?)
-        """, (today, today)).fetchall()
+        rows = c.execute(sql, params).fetchall()
     return [r["user_id"] for r in rows]
 
 
@@ -226,6 +241,29 @@ def get_reminders(user_id: int) -> bool:
     with _conn() as c:
         row = c.execute("SELECT reminders FROM users WHERE user_id=?", (user_id,)).fetchone()
     return bool(row["reminders"]) if row else True
+
+
+def set_reminder_hour(user_id: int, hour: int) -> None:
+    with _conn() as c:
+        c.execute("UPDATE users SET reminder_hour=? WHERE user_id=?", (hour % 24, user_id))
+
+
+def set_tz_offset(user_id: int, offset: int) -> None:
+    offset = max(-12, min(14, offset))
+    with _conn() as c:
+        c.execute("UPDATE users SET tz_offset=? WHERE user_id=?", (offset, user_id))
+
+
+def get_reminder_settings(user_id: int) -> dict:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT reminders, reminder_hour, tz_offset FROM users WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return {"enabled": True, "hour": 18, "tz": 0}
+    return {"enabled": bool(row["reminders"]),
+            "hour": row["reminder_hour"], "tz": row["tz_offset"]}
 
 
 def get_history(user_id: int, limit: int = 10) -> list:

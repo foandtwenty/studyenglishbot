@@ -2,6 +2,7 @@ import os
 import re
 import random
 import logging
+import datetime as dt
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -386,14 +387,48 @@ def build_menu_history(user_id: int, back_callback: str = "back_to_types",
 def build_menu_help(user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
     rows: list[list[InlineKeyboardButton]] = []
     if user_id is not None:
-        try:
-            on = db.get_reminders(user_id)
-        except Exception:
-            on = True
-        label = "🔔 Напоминания: вкл" if on else "🔕 Напоминания: выкл"
-        rows.append([InlineKeyboardButton(label, callback_data="reminders_toggle")])
+        rows.append([InlineKeyboardButton("🔔 Напоминания", callback_data="menu_reminders")])
     rows.append([InlineKeyboardButton("← Главное меню", callback_data="back_to_types")])
     return HELP_TEXT, InlineKeyboardMarkup(rows)
+
+
+def _tz_label(tz: int) -> str:
+    return f"UTC{tz:+d}" if tz else "UTC"
+
+
+def build_reminder_settings(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    s  = db.get_reminder_settings(user_id)
+    tz = _tz_label(s["tz"])
+    if s["enabled"]:
+        text = (
+            f"🔔 *Напоминания включены*\n\n"
+            f"Время: *{s['hour']:02d}:00* ({tz})\n\n"
+            f"_Бот напомнит в это время, если будут карточки к повторению._"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔕 Выключить", callback_data="rem_toggle")],
+            [
+                InlineKeyboardButton("◀",                       callback_data="rem_hour_dec"),
+                InlineKeyboardButton(f"🕐 {s['hour']:02d}:00",  callback_data="noop"),
+                InlineKeyboardButton("▶",                       callback_data="rem_hour_inc"),
+            ],
+            [
+                InlineKeyboardButton("◀",            callback_data="rem_tz_dec"),
+                InlineKeyboardButton(f"🌍 {tz}",     callback_data="noop"),
+                InlineKeyboardButton("▶",            callback_data="rem_tz_inc"),
+            ],
+            [InlineKeyboardButton("← Назад", callback_data="menu_help")],
+        ])
+    else:
+        text = (
+            "🔕 *Напоминания выключены*\n\n"
+            "_Включи, чтобы бот в удобное время напоминал о карточках к повторению._"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔔 Включить", callback_data="rem_toggle")],
+            [InlineKeyboardButton("← Назад",    callback_data="menu_help")],
+        ])
+    return text, kb
 
 
 def build_size_selector(exercise_type: str, type_mode: bool = False,
@@ -964,14 +999,26 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
-    if data == "reminders_toggle":
-        try:
-            db.set_reminders(user_id, not db.get_reminders(user_id))
-        except Exception:
-            logger.exception("toggle reminders failed for %s", user_id)
-        text, kb = build_menu_help(user_id)
+    if data == "menu_reminders":
+        db.ensure_user(user_id)
+        text, kb = build_reminder_settings(user_id)
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
+
+    if data in ("rem_toggle", "rem_hour_inc", "rem_hour_dec", "rem_tz_inc", "rem_tz_dec"):
+        db.ensure_user(user_id)
+        s = db.get_reminder_settings(user_id)
+        if   data == "rem_toggle":   db.set_reminders(user_id, not s["enabled"])
+        elif data == "rem_hour_inc": db.set_reminder_hour(user_id, s["hour"] + 1)
+        elif data == "rem_hour_dec": db.set_reminder_hour(user_id, s["hour"] - 1)
+        elif data == "rem_tz_inc":   db.set_tz_offset(user_id, s["tz"] + 1)
+        elif data == "rem_tz_dec":   db.set_tz_offset(user_id, s["tz"] - 1)
+        text, kb = build_reminder_settings(user_id)
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    if data == "noop":
+        return                       # display-only stepper label
 
     if data == "reminders_off":
         db.set_reminders(user_id, False)
@@ -993,7 +1040,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
-    if data.startswith("type_"):
+    if data.startswith("type_") and (data[5:] in CONTENT or data[5:] == "mixed"):
         ex_type = data[5:]
         context.user_data["pending_type"] = ex_type
         text, kb = build_size_selector(ex_type, type_mode=type_mode, user_id=user_id)
@@ -1239,9 +1286,11 @@ async def _post_init(app: Application) -> None:
 
 
 async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Daily nudge: DM users who have due cards and haven't studied today."""
+    """Runs hourly: DM users whose personal reminder time is this UTC hour and
+    who have due cards but haven't studied today."""
+    utc_hour = dt.datetime.now(dt.timezone.utc).hour
     try:
-        targets = db.get_reminder_targets()
+        targets = db.get_reminder_targets(utc_hour=utc_hour)
     except Exception:
         logger.exception("Failed to fetch reminder targets")
         return
@@ -1310,12 +1359,13 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_error_handler(on_error)
 
-    # Daily spaced-repetition reminders (opt-out). REMINDER_HOUR is server time.
+    # Spaced-repetition reminders: check every hour and ping users whose
+    # personal time (reminder_hour - tz_offset) matches the current UTC hour.
     if app.job_queue is not None:
-        import datetime as _dt
-        hour = int(os.environ.get("REMINDER_HOUR", "18"))
-        app.job_queue.run_daily(send_reminders, time=_dt.time(hour=hour))
-        logger.info("Daily reminders scheduled at %02d:00 (server time)", hour)
+        now   = dt.datetime.now(dt.timezone.utc)
+        first = now.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)
+        app.job_queue.run_repeating(send_reminders, interval=3600, first=first)
+        logger.info("Hourly reminder check scheduled (next at %s)", first.isoformat())
     else:
         logger.warning("JobQueue unavailable — reminders off "
                        "(needs python-telegram-bot[job-queue])")
