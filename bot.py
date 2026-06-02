@@ -169,7 +169,104 @@ def build_type_selector(welcome: bool = False) -> tuple[str, InlineKeyboardMarku
         [InlineKeyboardButton("📍 Предлоги in / on / at",      callback_data="type_prep")],
         [InlineKeyboardButton("➕ Глаголы + to / -ing",        callback_data="type_vp")],
         [InlineKeyboardButton("🔗 Прилагательные + предлог",   callback_data="type_adjprep")],
+        [
+            InlineKeyboardButton("📊 Статистика", callback_data="menu_stats"),
+            InlineKeyboardButton("📋 Ошибки",     callback_data="menu_weak"),
+        ],
+        [
+            InlineKeyboardButton("📈 История",    callback_data="menu_history"),
+            InlineKeyboardButton("❓ Помощь",     callback_data="menu_help"),
+        ],
     ])
+    return text, kb
+
+
+def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    streak      = db.get_streak(user_id)
+    streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}*\n" if streak else ""
+    try:
+        lt = db.get_lifetime_stats(user_id)
+        lifetime_block = (
+            f"\n🏆 *За всё время*\n"
+            f"📚 Карточек пройдено: *{lt['total_cards']}*\n"
+            f"🎓 Освоено: *{lt['mastered']}*\n"
+            f"🎯 Изучается: *{lt['learning']}*\n"
+            f"🗓 Сессий: *{lt['sessions']}*"
+        ) if lt["sessions"] > 0 else "\nСессий пока не завершено."
+    except Exception:
+        lifetime_block = ""
+
+    if session and session["results"]:
+        results = session["results"]
+        known   = sum(1 for v in results.values() if v)
+        unknown = sum(1 for v in results.values() if not v)
+        studied = len(results)
+        total   = session["original_total"]
+        ex_type = session["exercise_type"]
+        current_block = (
+            f"📊 *Текущая сессия*\n"
+            f"_{TYPE_LABEL.get(ex_type, '')}_\n\n"
+            f"✅ Знаю:           *{known}*\n"
+            f"❌ Учу:             *{unknown}*\n"
+            f"📚 Пройдено:   *{studied} / {total}*\n"
+            f"⏳ Осталось:   *{total - studied}*\n"
+            f"{streak_line}"
+        )
+    else:
+        current_block = f"📊 *Статистика*\n\n{streak_line}Нет активной сессии.\n"
+
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Главное меню", callback_data="back_to_types")]])
+    return current_block + lifetime_block, kb
+
+
+def build_menu_weak(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    try:
+        rows = db.get_weak_verbs(user_id)
+        body = (
+            "\n".join(_format_weak_item(r["verb_v1"], r["unknown_count"]) for r in rows)
+            if rows else "Пока нет данных. Пройди хотя бы одну сессию до конца! 📚"
+        )
+    except Exception:
+        body = "Не удалось загрузить данные."
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Главное меню", callback_data="back_to_types")]])
+    return f"📋 *Сложные карточки:*\n\n{body}", kb
+
+
+def build_menu_history(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    try:
+        rows = db.get_history(user_id)
+        if rows:
+            lines = []
+            for r in rows:
+                pct = round(r["known"] / r["total"] * 100) if r["total"] else 0
+                lines.append(f"📅 {r['finished_at']} — {r['known']}/{r['total']} ({pct}%)")
+            body = "\n".join(lines)
+        else:
+            body = "История пуста."
+    except Exception:
+        body = "Не удалось загрузить данные."
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Главное меню", callback_data="back_to_types")]])
+    return f"📈 *История сессий:*\n\n{body}", kb
+
+
+def build_menu_help() -> tuple[str, InlineKeyboardMarkup]:
+    text = (
+        "📚 *Study English Bot*\n\n"
+        "*Типы тренировок:*\n"
+        "🔤 Неправильные глаголы — вспомни V2 и V3\n"
+        "📍 Предлоги — in, on или at?\n"
+        "➕ Глаголы + to / -ing\n"
+        "🔗 Прилагательные + предлог (afraid of...)\n\n"
+        "*Как работает:*\n"
+        "Сначала вспоминаешь сам, затем смотришь ответ и честно оцениваешь.\n"
+        "Ошибочные карточки возвращаются через 2–3 хода и снова в конце.\n\n"
+        "*В меню выбора колоды:*\n"
+        "🎯 Только ошибки — тренировка только сложных карточек\n"
+        "✏️ Режим ввода — печатать V2 и V3 вместо кнопок\n\n"
+        "*На карточке глагола:*\n"
+        "💡 Подсказка — показывает первую букву V2"
+    )
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Главное меню", callback_data="back_to_types")]])
     return text, kb
 
 
@@ -584,50 +681,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    session = context.user_data.get("session")
-    user_id = update.effective_user.id
-    streak  = db.get_streak(user_id)
-    streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}*\n" if streak else ""
-
-    try:
-        lt = db.get_lifetime_stats(user_id)
-        lifetime_block = (
-            f"\n🏆 *За всё время*\n"
-            f"📚 Карточек пройдено: *{lt['total_cards']}*\n"
-            f"🎓 Освоено: *{lt['mastered']}*\n"
-            f"🎯 Изучается: *{lt['learning']}*\n"
-            f"🗓 Сессий: *{lt['sessions']}*"
-        ) if lt["sessions"] > 0 else ""
-    except Exception:
-        lifetime_block = ""
-
-    if not session or not session["results"]:
-        await update.message.reply_text(
-            f"Пока нет данных. Начни сессию с /start 🙂\n"
-            f"{streak_line}"
-            f"{lifetime_block}",
-            parse_mode="Markdown",
-        )
-        return
-
-    results = session["results"]
-    known   = sum(1 for v in results.values() if v)
-    unknown = sum(1 for v in results.values() if not v)
-    studied = len(results)
-    total   = session["original_total"]
-    ex_type = session["exercise_type"]
-
-    await update.message.reply_text(
-        f"📊 *Статистика сессии*\n"
-        f"_{TYPE_LABEL.get(ex_type, '')}_\n\n"
-        f"✅ Знаю:           *{known}*\n"
-        f"❌ Учу:             *{unknown}*\n"
-        f"📚 Пройдено:   *{studied} / {total}*\n"
-        f"⏳ Осталось:   *{total - studied}*\n"
-        f"{streak_line}"
-        f"{lifetime_block}",
-        parse_mode="Markdown",
-    )
+    text, _ = build_menu_stats(context.user_data.get("session"), update.effective_user.id)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 def _format_weak_item(iid: str, error_count: int) -> str:
@@ -743,6 +798,28 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             known = sum(1 for v in session["results"].values() if v)
             note  = f"_Сессия прервана — {known} из {done} {_card_plural(done)} выполнено_\n\n"
             text  = note + text
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    # ── Menu screens ──
+    if data == "menu_stats":
+        session = context.user_data.get("session")
+        text, kb = build_menu_stats(session, user_id)
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    if data == "menu_weak":
+        text, kb = build_menu_weak(user_id)
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    if data == "menu_history":
+        text, kb = build_menu_history(user_id)
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    if data == "menu_help":
+        text, kb = build_menu_help()
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
