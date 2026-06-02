@@ -34,13 +34,7 @@ CONTENT = {
     "adjprep": ADJ_PREPS,
 }
 
-TYPE_EMOJI = {
-    "verbs":   "🔤",
-    "prep":    "📍",
-    "vp":      "➕",
-    "adjprep": "🔗",
-}
-
+TYPE_EMOJI = {"verbs": "🔤", "prep": "📍", "vp": "➕", "adjprep": "🔗"}
 TYPE_LABEL = {
     "verbs":   "Неправильные глаголы",
     "prep":    "Предлоги in / on / at",
@@ -56,15 +50,32 @@ def item_id(item: dict) -> str:
 
 
 def _streak_label(n: int) -> str:
-    if n % 10 == 1 and n % 100 != 11:   return "день"
-    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return "дня"
+    if n % 10 == 1 and n % 100 != 11:                       return "день"
+    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):      return "дня"
     return "дней"
 
 
 def _card_plural(n: int) -> str:
-    if n % 10 == 1 and n % 100 != 11:   return "карточку"
-    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return "карточки"
+    if n % 10 == 1 and n % 100 != 11:                       return "карточку"
+    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):      return "карточки"
     return "карточек"
+
+
+def _progress_bar(session: dict) -> str:
+    """10-block emoji bar: 🟩 known · 🟥 unknown · ⬜️ remaining."""
+    if session.get("phase") == "end_review":
+        return ""
+    results = session["results"]
+    total   = session["original_total"]
+    if not total:
+        return ""
+    known   = sum(1 for v in results.values() if v)
+    unknown = sum(1 for v in results.values() if not v)
+    n = 10
+    k = round(known   * n / total)
+    u = min(round(unknown * n / total), n - k)
+    e = n - k - u
+    return "🟩" * k + "🟥" * u + "⬜️" * e
 
 
 # ─── Session ──────────────────────────────────────────────────────────────────
@@ -100,6 +111,7 @@ def current_item(session: dict) -> dict | None:
 
 def progress_line(session: dict, item: dict) -> str:
     emoji = TYPE_EMOJI.get(session.get("exercise_type", "verbs"), "📚")
+    bar   = _progress_bar(session)
 
     if session["phase"] == "end_review":
         pos   = session["pos"] + 1
@@ -111,9 +123,9 @@ def progress_line(session: dict, item: dict) -> str:
     done   = len(session["first_shown"])
     total  = session["original_total"]
 
-    if is_new:
-        return f"{emoji} *{done + 1} / {total}*"
-    return f"🔄 *Повтор · {done} / {total}*"
+    counter = f"{done + 1} / {total}" if is_new else f"Повтор · {done} / {total}"
+    prefix  = emoji if is_new else "🔄"
+    return f"{prefix} *{counter}*\n{bar}"
 
 
 # ─── Selectors ────────────────────────────────────────────────────────────────
@@ -136,11 +148,10 @@ def build_size_selector(exercise_type: str, type_mode: bool = False) -> tuple[st
     if total >= 20:
         row.append(InlineKeyboardButton("20", callback_data="size_20"))
     row.append(InlineKeyboardButton(f"Все {total}", callback_data="size_all"))
-
     rows = [row]
     if exercise_type == "verbs":
-        mode_label = "✏️ Режим ввода: вкл ✓" if type_mode else "✏️ Режим ввода: выкл"
-        rows.append([InlineKeyboardButton(mode_label, callback_data="toggle_mode")])
+        label = "✏️ Режим ввода: вкл ✓" if type_mode else "✏️ Режим ввода: выкл"
+        rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
     rows.append([InlineKeyboardButton("← Назад", callback_data="back_to_types")])
     return text, InlineKeyboardMarkup(rows)
 
@@ -149,32 +160,47 @@ def build_size_selector(exercise_type: str, type_mode: bool = False) -> tuple[st
 
 def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     item = current_item(session)
-    text = (
-        f"{progress_line(session, item)}\n\n"
-        f"🔤 *{item['v1']}*\n"
-        f"🇷🇺 _{item['translation']}_\n\n"
-        f"Помнишь все три формы?"
-    )
+    prog = progress_line(session, item)
+
     if type_mode:
+        text = (
+            f"{prog}\n\n"
+            f"🔤 *{item['v1']}*\n"
+            f"🇷🇺 _{item['translation']}_\n\n"
+            f"⌨️ Напиши V2 и V3 через пробел:"
+        )
         kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Знаю",    callback_data="remember"),
-                InlineKeyboardButton("❌ Не знаю", callback_data="forget"),
-            ],
-            [InlineKeyboardButton("✏️ Написать V2 и V3", callback_data="type_answer")],
-            [InlineKeyboardButton("⏹ Стоп",              callback_data="stop_session")],
+            [InlineKeyboardButton("✏️ Написать", callback_data="type_answer")],
+            [InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session")],
         ])
     else:
+        text = (
+            f"{prog}\n\n"
+            f"🔤 *{item['v1']}*\n"
+            f"🇷🇺 _{item['translation']}_\n\n"
+            f"Вспомни V2 и V3, затем проверь:"
+        )
         kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Помню",    callback_data="remember"),
-                InlineKeyboardButton("❌ Не помню", callback_data="forget"),
-            ],
-            [
-                InlineKeyboardButton("👁 Показать", callback_data="show"),
-                InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session"),
-            ],
+            [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
+            [InlineKeyboardButton("⏹ Стоп",            callback_data="stop_session")],
         ])
+    return text, kb
+
+
+def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
+    item = current_item(session)
+    text = (
+        f"{progress_line(session, item)}\n\n"
+        f"📌 *V1:* `{item['v1']}`\n"
+        f"📝 *V2:* `{item['v2']}`\n"
+        f"✅ *V3:* `{item['v3']}`\n"
+        f"🇷🇺 _{item['translation']}_\n\n"
+        f"💬 _{item['example']}_"
+    )
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Знал(а)",    callback_data="knew"),
+        InlineKeyboardButton("❌ Не знал(а)", callback_data="didnt_know"),
+    ]])
     return text, kb
 
 
@@ -189,11 +215,11 @@ def build_prep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     )
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("in",  callback_data="ans_in"),
-            InlineKeyboardButton("on",  callback_data="ans_on"),
-            InlineKeyboardButton("at",  callback_data="ans_at"),
-            InlineKeyboardButton("⏹",  callback_data="stop_session"),
+            InlineKeyboardButton("in", callback_data="ans_in"),
+            InlineKeyboardButton("on", callback_data="ans_on"),
+            InlineKeyboardButton("at", callback_data="ans_at"),
         ],
+        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
     ])
     return text, kb
 
@@ -206,11 +232,13 @@ def build_vp_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"🇷🇺 _{item['translation']}_\n\n"
         f"Какой шаблон?"
     )
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("+ -ing", callback_data="ans_ing"),
-        InlineKeyboardButton("+ to",   callback_data="ans_to"),
-        InlineKeyboardButton("⏹",     callback_data="stop_session"),
-    ]])
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("+ -ing", callback_data="ans_ing"),
+            InlineKeyboardButton("+ to",   callback_data="ans_to"),
+        ],
+        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
+    ])
     return text, kb
 
 
@@ -224,10 +252,10 @@ def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"🇷🇺 _{item['translation']}_\n\n"
         f"Выбери правильный предлог:"
     )
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton(opt, callback_data=f"ans_{opt}")
-        for opt in options
-    ] + [InlineKeyboardButton("⏹", callback_data="stop_session")]])
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(opt, callback_data=f"ans_{opt}") for opt in options],
+        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
+    ])
     return text, kb
 
 
@@ -272,26 +300,6 @@ def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, In
         f"💬 _{item['example']}_",
         kb_next,
     )
-
-
-def build_verb_answer(session: dict, source: str) -> tuple[str, InlineKeyboardMarkup]:
-    item = current_item(session)
-    text = (
-        f"{progress_line(session, item)}\n\n"
-        f"📌 *V1:* `{item['v1']}`\n"
-        f"📝 *V2:* `{item['v2']}`\n"
-        f"✅ *V3:* `{item['v3']}`\n"
-        f"🇷🇺 _{item['translation']}_\n\n"
-        f"💬 _{item['example']}_"
-    )
-    if source == "forget":
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Следующая карточка", callback_data="next")]])
-    else:
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Знал(а)",    callback_data="knew"),
-            InlineKeyboardButton("❌ Не знал(а)", callback_data="didnt_know"),
-        ]])
-    return text, kb
 
 
 def build_type_prompt(session: dict) -> tuple[str, InlineKeyboardMarkup]:
@@ -483,13 +491,12 @@ async def show_results(chat_id: int, session: dict, bot) -> None:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     db.ensure_user(update.effective_user.id)
-
     try:
         await update.message.delete()
     except Exception:
         pass
 
-    text, kb = build_type_selector()
+    text, kb    = build_type_selector()
     card_msg_id = context.user_data.get("card_message_id")
     if card_msg_id:
         try:
@@ -538,6 +545,19 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+def _format_weak_item(iid: str, error_count: int) -> str:
+    if iid in VERBS_BY_V1:
+        return f"• `{iid}` (глагол) — ошибок: {error_count}"
+    if iid in ADJ_BY_ADJ:
+        a = ADJ_BY_ADJ[iid]
+        return f"• `{iid}` + {a['preposition']} — ошибок: {error_count}"
+    if iid in VP_BY_VERB:
+        vp = VP_BY_VERB[iid]
+        return f"• `{iid}` + {vp['pattern']} — ошибок: {error_count}"
+    short = iid[:40] + "…" if len(iid) > 40 else iid
+    return f"• _{short}_ — ошибок: {error_count}"
+
+
 async def cmd_weak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     rows = db.get_weak_verbs(update.effective_user.id)
     if not rows:
@@ -580,18 +600,20 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "📚 *Study English Bot*\n\n"
         "*Типы тренировок:*\n"
-        "🔤 Неправильные глаголы — вспомни V1/V2/V3\n"
+        "🔤 Неправильные глаголы — вспомни V2 и V3\n"
         "📍 Предлоги — in, on или at?\n"
-        "➕ Глаголы + to/-ing — enjoy swimming или want to go?\n"
-        "🔗 Прилагательные — afraid of, nervous about?\n\n"
+        "➕ Глаголы + to / -ing\n"
+        "🔗 Прилагательные + предлог (afraid of...)\n\n"
+        "*Как работает:*\n"
+        "Глаголы: сначала вспоминаешь сам, затем нажимаешь «Показать ответ» и честно оцениваешь себя.\n"
+        "Ошибочные карточки возвращаются через 2–3 хода и снова в конце сессии.\n\n"
         "*Команды:*\n"
         "/start — новая сессия\n"
         "/stats — статистика текущей сессии\n"
-        "/weak — твои самые сложные карточки\n"
-        "/history — история последних сессий\n"
-        "/mode — переключить режим ввода (для глаголов)\n"
+        "/weak — сложные карточки\n"
+        "/history — история сессий\n"
         "/help — эта справка\n\n"
-        "*Совет:* режим ввода можно включить прямо в меню выбора размера колоды.",
+        "_Режим ввода доступен в меню выбора колоды (только для глаголов)._",
         parse_mode="Markdown",
     )
 
@@ -600,7 +622,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     admin_id = int(os.environ.get("ADMIN_ID", 0))
     if update.effective_user.id != admin_id:
         return
-    s = db.get_admin_stats()
+    s     = db.get_admin_stats()
     daily = "\n".join(
         f"  {r['finished_at']}: {r['cnt']} сессий" for r in s["daily"]
     ) or "  нет данных"
@@ -616,21 +638,6 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-# ─── Shared weak-item formatter ───────────────────────────────────────────────
-
-def _format_weak_item(iid: str, error_count: int) -> str:
-    if iid in VERBS_BY_V1:
-        return f"• `{iid}` (глагол) — ошибок: {error_count}"
-    if iid in ADJ_BY_ADJ:
-        a = ADJ_BY_ADJ[iid]
-        return f"• `{iid}` + {a['preposition']} — ошибок: {error_count}"
-    if iid in VP_BY_VERB:
-        vp = VP_BY_VERB[iid]
-        return f"• `{iid}` + {vp['pattern']} — ошибок: {error_count}"
-    short = iid[:40] + "…" if len(iid) > 40 else iid
-    return f"• _{short}_ — ошибок: {error_count}"
-
-
 # ─── Callback handler ─────────────────────────────────────────────────────────
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -641,7 +648,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id   = query.from_user.id
     type_mode = context.user_data.get("type_mode", False)
 
-    # ── Stop session ──
+    # ── Stop ──
     if data == "stop_session":
         session = context.user_data.pop("session", None)
         text, kb = build_type_selector()
@@ -667,14 +674,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data.startswith("type_"):
-        ex_type = data[5:]  # "verbs", "prep", "vp", "adjprep"
+        ex_type = data[5:]
         context.user_data["pending_type"] = ex_type
         text, kb = build_size_selector(ex_type, type_mode=type_mode)
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
     if data in ("size_10", "size_20", "size_all"):
-        ex_type = context.user_data.get("pending_type", "verbs")
+        ex_type  = context.user_data.get("pending_type", "verbs")
         size_map = {"size_10": 10, "size_20": 20, "size_all": None}
         session  = new_session(ex_type, size=size_map[data], user_id=user_id)
         msg_id   = context.user_data.get("card_message_id") or query.message.message_id
@@ -697,13 +704,13 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             pass
         return
 
-    # ── Final screen — inline stats ──
+    # ── Final screen inline stats ──
     if data == "final_weak":
         rows = db.get_weak_verbs(user_id)
-        if not rows:
-            body = "Данных пока нет — пройди больше сессий!"
-        else:
-            body = "\n".join(_format_weak_item(r["verb_v1"], r["unknown_count"]) for r in rows)
+        body = (
+            "\n".join(_format_weak_item(r["verb_v1"], r["unknown_count"]) for r in rows)
+            if rows else "Данных пока нет — пройди больше сессий!"
+        )
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Назад к результатам", callback_data="back_to_final")]])
         await safe_edit(context.bot, chat_id, query.message.message_id,
                         f"📋 *Сложные карточки:*\n\n{body}", kb)
@@ -711,14 +718,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data == "final_history":
         rows = db.get_history(user_id)
-        if not rows:
-            body = "История пуста."
-        else:
+        if rows:
             lines = []
             for r in rows:
                 pct = round(r["known"] / r["total"] * 100) if r["total"] else 0
                 lines.append(f"📅 {r['finished_at']} — {r['known']}/{r['total']} ({pct}%)")
             body = "\n".join(lines)
+        else:
+            body = "История пуста."
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Назад к результатам", callback_data="back_to_final")]])
         await safe_edit(context.bot, chat_id, query.message.message_id,
                         f"📈 *История сессий:*\n\n{body}", kb)
@@ -755,7 +762,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         correct_answer = item.get("answer") or item.get("pattern") or item.get("preposition")
         correct        = chosen == correct_answer
         text, kb       = build_choice_result(item, chosen, correct)
-
         if correct:
             mark_known(session, item)
             await safe_edit(context.bot, chat_id, session["message_id"], text, InlineKeyboardMarkup([]))
@@ -768,32 +774,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # ── Verb callbacks ──
-    if data == "type_answer":
-        session["awaiting_input"] = True
-        text, kb = build_type_prompt(session)
+    if data == "show":
+        text, kb = build_verb_answer(session)
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
-
-    elif data == "cancel_type":
-        session["awaiting_input"] = False
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
-
-    elif data == "remember":
-        mark_known(session, item)
-        advance(session)
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
-
-    elif data == "forget":
-        mark_unknown(session, item)
-        text, kb = build_verb_answer(session, "forget")
-        await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
-
-    elif data == "show":
-        text, kb = build_verb_answer(session, "show")
-        await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
-
-    elif data == "next":
-        advance(session)
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
 
     elif data == "knew":
         mark_known(session, item)
@@ -802,6 +785,19 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     elif data == "didnt_know":
         mark_unknown(session, item)
+        advance(session)
+        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+
+    elif data == "type_answer":
+        session["awaiting_input"] = True
+        text, kb = build_type_prompt(session)
+        await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
+
+    elif data == "cancel_type":
+        session["awaiting_input"] = False
+        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+
+    elif data == "next":
         advance(session)
         await show_card(chat_id, session, context.bot, type_mode=type_mode)
 
