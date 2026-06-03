@@ -320,6 +320,15 @@ def current_item(session: dict) -> dict | None:
     return q[p] if p < len(q) else None
 
 
+def _resume_info(context) -> tuple[int, int] | None:
+    """(done, total) for an unfinished session that can be resumed, else None
+    (a finished session has no current card)."""
+    s = context.user_data.get("session")
+    if s and current_item(s) is not None:
+        return len(s["first_shown"]), s["original_total"]
+    return None
+
+
 # ─── Progress line ────────────────────────────────────────────────────────────
 
 def progress_line(session: dict, item: dict) -> str:
@@ -343,8 +352,8 @@ def progress_line(session: dict, item: dict) -> str:
 
 # ─── Selectors ────────────────────────────────────────────────────────────────
 
-def build_type_selector(welcome: bool = False,
-                        user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
+def build_type_selector(welcome: bool = False, user_id: int | None = None,
+                        resume: tuple[int, int] | None = None) -> tuple[str, InlineKeyboardMarkup]:
     if welcome:
         text = (
             "👋 *Привет! Я Study English Bot.*\n\n"
@@ -362,6 +371,10 @@ def build_type_selector(welcome: bool = False,
         text = (f"{header}\n\n" if header else "") + "📚 *Что хочешь потренировать?*"
 
     rows: list[list[InlineKeyboardButton]] = []
+    if resume:
+        a, b = resume
+        rows.append([InlineKeyboardButton(
+            f"▶️ Продолжить ({a}/{b})", callback_data="resume_session")])
     due = _due_count(user_id)
     if due:
         rows.append([InlineKeyboardButton(
@@ -597,7 +610,7 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("💡 Подсказка", callback_data="hint")],
             [InlineKeyboardButton("❓ Не помню",  callback_data="reveal"),
-             InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session")],
+             InlineKeyboardButton("⏸ Пауза",      callback_data="stop_session")],
         ])
     else:
         text = (
@@ -609,7 +622,7 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
             [InlineKeyboardButton("💡 Подсказка",      callback_data="hint")],
-            [InlineKeyboardButton("⏹ Стоп",            callback_data="stop_session")],
+            [InlineKeyboardButton("⏸ Пауза",            callback_data="stop_session")],
         ])
     return text, kb
 
@@ -631,7 +644,7 @@ def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("✅ Помню",    callback_data="knew"),
             InlineKeyboardButton("❌ Не помню", callback_data="didnt_know"),
         ],
-        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
+        [InlineKeyboardButton("⏸ Пауза", callback_data="stop_session")],
     ])
     return text, kb
 
@@ -651,7 +664,7 @@ def build_prep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("on", callback_data="ans:on"),
             InlineKeyboardButton("at", callback_data="ans:at"),
         ],
-        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
+        [InlineKeyboardButton("⏸ Пауза", callback_data="stop_session")],
     ])
     return text, kb
 
@@ -669,7 +682,7 @@ def build_vp_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("+ -ing", callback_data="ans:ing"),
             InlineKeyboardButton("+ to",   callback_data="ans:to"),
         ],
-        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
+        [InlineKeyboardButton("⏸ Пауза", callback_data="stop_session")],
     ])
     return text, kb
 
@@ -687,7 +700,7 @@ def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(opt, callback_data=f"ans:{opt}") for opt in options],
-        [InlineKeyboardButton("⏹ Стоп", callback_data="stop_session")],
+        [InlineKeyboardButton("⏸ Пауза", callback_data="stop_session")],
     ])
     return text, kb
 
@@ -695,7 +708,7 @@ def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
 def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, InlineKeyboardMarkup]:
     kb_next = InlineKeyboardMarkup([
         [InlineKeyboardButton("➡️ Дальше", callback_data="next")],
-        [InlineKeyboardButton("⏹ Стоп",   callback_data="stop_session")],
+        [InlineKeyboardButton("⏸ Пауза",   callback_data="stop_session")],
     ])
     head = "✅ *Верно!*" if correct else "❌ *Неверно.*"
 
@@ -732,7 +745,7 @@ def build_type_result(item: dict, user_input: str | None, correct: bool) -> tupl
     note_line = f"\n\n📖 _{item['note']}_" if item.get("note") else ""
     kb_next   = InlineKeyboardMarkup([
         [InlineKeyboardButton("➡️ Дальше", callback_data="next")],
-        [InlineKeyboardButton("⏹ Стоп",   callback_data="stop_session")],
+        [InlineKeyboardButton("⏸ Пауза",   callback_data="stop_session")],
     ])
     if correct:
         return (
@@ -945,7 +958,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
-    text, kb    = build_type_selector(welcome=is_new, user_id=update.effective_user.id)
+    text, kb    = build_type_selector(welcome=is_new, user_id=update.effective_user.id,
+                                      resume=_resume_info(context))
     card_msg_id = context.user_data.get("card_message_id")
     if card_msg_id:
         try:
@@ -1103,21 +1117,24 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if _raw is not None and normalize_session(_raw) is None:
         context.user_data.pop("session", None)
 
-    # ── Stop ──
+    # ── Pause (keep the session so it can be resumed from the main menu) ──
     if data == "stop_session":
-        session = context.user_data.get("session")
-        # Main deck already finished → never discard, finalize & save instead.
-        if session and session.get("phase") == PHASE_END_REVIEW:
-            await show_results(chat_id, session, context.bot)
-            return
-        session = context.user_data.pop("session", None)
-        text, kb = build_type_selector(user_id=user_id)
-        if session and session["results"]:
-            done  = len(session["results"])
-            known = sum(1 for v in session["results"].values() if v)
-            note  = f"_Сессия прервана. Пройдено: {known} из {done}._\n\n"
-            text  = note + text
+        resume = _resume_info(context)
+        text, kb = build_type_selector(user_id=user_id, resume=resume)
+        if resume:
+            text = "_⏸ Тренировка на паузе — продолжишь, когда удобно._\n\n" + text
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    if data == "resume_session":
+        session = context.user_data.get("session")
+        if session is None or _resume_info(context) is None:
+            text, kb = build_type_selector(user_id=user_id)
+            await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+            return
+        session["message_id"] = query.message.message_id
+        context.user_data["card_message_id"] = query.message.message_id
+        await show_card(chat_id, session, context.bot, type_mode=type_mode)
         return
 
     # ── Menu screens ──
@@ -1176,7 +1193,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # ── Navigation ──
     if data == "back_to_types":
-        text, kb = build_type_selector(user_id=user_id)
+        text, kb = build_type_selector(user_id=user_id, resume=_resume_info(context))
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
@@ -1237,6 +1254,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data == "new_session":
+        context.user_data.pop("session", None)        # «Другая тема» — clear finished session
         text, kb = build_type_selector(user_id=user_id)
         msg_id   = context.user_data.get("card_message_id") or query.message.message_id
         context.user_data["card_message_id"] = msg_id
@@ -1356,13 +1374,13 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             text = f"{base}\n\n✍️ Напиши V2 и V3 через пробел:"
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("❓ Не помню", callback_data="reveal"),
-                 InlineKeyboardButton("⏹ Стоп",     callback_data="stop_session")],
+                 InlineKeyboardButton("⏸ Пауза",     callback_data="stop_session")],
             ])
         else:
             text = f"{base}\n\nВспомни формы — потом загляни в ответ:"
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
-                [InlineKeyboardButton("⏹ Стоп",            callback_data="stop_session")],
+                [InlineKeyboardButton("⏸ Пауза",            callback_data="stop_session")],
             ])
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
 

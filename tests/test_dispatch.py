@@ -158,3 +158,32 @@ def test_profile_then_stats_then_back_navigation(harness):
     assert "Статистика" in harness.ctx.bot.edits[-1].text
     # back goes to profile, not main
     assert "menu_profile" in str(harness.ctx.bot.edits[-1].kb)
+
+
+def test_pause_keeps_session_and_offers_resume(harness):
+    harness.press("pick:verbs")
+    harness.press("lvl:1")
+    s = harness.ctx.user_data["session"]
+    bot.advance(s)                                     # simulate some progress
+    harness.press("stop_session")                      # «Пауза»
+    assert harness.ctx.user_data.get("session") is s   # session NOT discarded
+    last = harness.ctx.bot.edits[-1]
+    assert "паузе" in last.text
+    assert "resume_session" in str(last.kb)            # «Продолжить» offered
+
+
+def test_resume_continues_the_session(harness):
+    harness.press("pick:verbs")
+    harness.press("lvl:1")
+    harness.press("stop_session")
+    harness.press("resume_session")
+    last = harness.ctx.bot.edits[-1].text
+    assert "Пауза" in str(harness.ctx.bot.edits[-1].kb) or "/ " in last  # a card is shown again
+
+
+def test_new_session_clears_paused(harness):
+    harness.press("pick:verbs")
+    harness.press("lvl:1")
+    harness.press("stop_session")
+    harness.press("new_session")
+    assert harness.ctx.user_data.get("session") is None
