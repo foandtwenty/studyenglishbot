@@ -80,12 +80,13 @@ def test_alert_branch_shows_alert_once_no_crash(harness):
     assert harness.ctx.user_data.get("session") is None
 
 
-def test_pick_then_size_creates_session(harness):
+def test_pick_then_level_creates_session(harness):
     harness.press("pick:verbs")
-    harness.press("size:10")
+    harness.press("lvl:1")                            # Базовый
     s = harness.ctx.user_data.get("session")
     assert s is not None and s["exercise_type"] == "verbs"
-    assert len(s["queue"]) == 10
+    assert len(s["queue"]) == len(bot._level_deck("verbs", 1))
+    assert all(bot.item_level(i) == 1 for i in s["queue"])
 
 
 def test_type_answer_reaches_input_prompt(harness):
@@ -93,7 +94,7 @@ def test_type_answer_reaches_input_prompt(harness):
     swallowed by the exercise-type selector."""
     harness.press("pick:verbs")
     harness.press("toggle_mode")
-    harness.press("size:10")
+    harness.press("lvl:1")
     harness.press("type_answer")
     assert harness.ctx.user_data["session"]["awaiting_input"] is True
     assert "Напиши" in harness.ctx.bot.edits[-1].text

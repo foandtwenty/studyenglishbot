@@ -164,9 +164,18 @@ def test_type_mode_only_applies_to_pure_verbs_deck():
     assert (True and mixed.get("exercise_type") == "verbs") is False
 
 
-def test_size_selector_hides_10_button_when_small():
-    # adjprep has 58 cards -> shows 10/20; a tiny synthetic type would hide 10,
-    # but here just assert the real types expose sane buttons.
+def test_single_type_selector_shows_levels_not_counts():
     text, kb = bot.build_size_selector("adjprep")
     flat = str(kb)
-    assert "size:10" in flat and "size:20" in flat and "size:all" in flat
+    assert "С чего начнём" in text
+    assert "lvl:1" in flat and "lvl:2" in flat and "lvl:3" in flat and "lvl:all" in flat
+    assert "size:10" not in flat                # single types are level-based now
+    # button labels show the per-level counts
+    assert "🟢 Базовый" in flat and "🔴 Продвинутый" in flat
+
+
+def test_level_decks_partition_each_type():
+    for ex in ("verbs", "prep", "vp", "adjprep"):
+        sizes = [len(bot._level_deck(ex, lvl)) for lvl in (1, 2, 3)]
+        assert sum(sizes) == len(bot.CONTENT[ex])      # every card has exactly one level
+        assert all(s > 0 for s in sizes)               # no empty tier

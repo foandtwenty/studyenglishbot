@@ -11,10 +11,13 @@ from telegram.ext import (
 )
 from telegram.error import BadRequest
 
+from collections import Counter
+
 from verbs import VERBS
 from prepositions import PREPOSITIONS
 from verb_patterns import VERB_PATTERNS
 from adj_preps import ADJ_PREPS
+from levels import LEVELS
 import database as db
 
 logging.basicConfig(
@@ -71,7 +74,9 @@ HELP_TEXT = (
     "🎲 Всё вперемешку — карточки всех типов сразу\n"
     "📊 Статистика · 📋 Сложные — список твоих ошибок\n"
     "📈 История · ❓ Помощь\n\n"
-    "*Перед стартом колоды:*\n"
+    "*Перед стартом:*\n"
+    "Выбери уровень — 🟢 Базовый (самые частые), 🟡 Средний, 🔴 Продвинутый "
+    "— или «📚 Все».\n"
     "🎯 Только ошибки — тренировать лишь сложные карточки\n"
     "✏️ Режим ввода — печатать V2 и V3 вместо кнопок\n\n"
     "*На карточке глагола:*\n"
@@ -98,12 +103,24 @@ def card_key(item: dict) -> str:
     return _stat_key(item_type(item), item_id(item))
 
 
+# Difficulty tiers: 1=Базовый, 2=Средний, 3=Продвинутый.
+LEVEL_LABEL = {1: "🟢 Базовый", 2: "🟡 Средний", 3: "🔴 Продвинутый"}
+
+
+def item_level(item: dict) -> int:
+    return LEVELS.get(item_type(item), {}).get(item_id(item), 2)
+
+
+def _level_deck(exercise_type: str, level: int) -> list:
+    return [i for i in CONTENT[exercise_type] if item_level(i) == level]
+
+
 # ─── Callback routing ───────────────────────────────────────────────────────
 # Dynamic callback families carry an argument as "prefix:arg"; everything else
 # is a static action (arg=None). Separate namespaces make collisions — like the
 # old `type_answer` being swallowed by the `type_<exercise>` matcher —
 # impossible by construction, and make routing a pure, unit-testable function.
-DYNAMIC_PREFIXES = frozenset({"pick", "size", "ans"})
+DYNAMIC_PREFIXES = frozenset({"pick", "size", "ans", "lvl"})
 
 
 def parse_callback(data: str) -> tuple[str, str | None]:
@@ -521,33 +538,33 @@ def build_reminder_settings(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
 
 def build_size_selector(exercise_type: str, type_mode: bool = False,
                         user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    total = len(_mixed_pool()) if exercise_type == "mixed" else len(CONTENT[exercise_type])
-    text  = f"{TYPE_EMOJI.get(exercise_type, '🎯')} *{TYPE_LABEL[exercise_type]}*\n\nСколько карточек?"
+    # Mixed is the "quick interleaved sampler" — sized by count, not level.
     if exercise_type == "mixed":
-        # The mixed pool is large; offer fixed sizes instead of "Все N".
-        row = [
+        text = f"{TYPE_EMOJI['mixed']} *{TYPE_LABEL['mixed']}*\n\nСколько карточек?"
+        rows = [[
             InlineKeyboardButton("10", callback_data="size:10"),
             InlineKeyboardButton("20", callback_data="size:20"),
             InlineKeyboardButton("30", callback_data="size:30"),
-        ]
-    else:
-        row = []
-        if total > 10:
-            row.append(InlineKeyboardButton("10", callback_data="size:10"))
-        if total >= 20:
-            row.append(InlineKeyboardButton("20", callback_data="size:20"))
-        row.append(InlineKeyboardButton(f"Все {total}", callback_data="size:all"))
-    rows = [row]
+        ], [InlineKeyboardButton("← Назад", callback_data="back_to_types")]]
+        return text, InlineKeyboardMarkup(rows)
 
-    # "Only errors" button — shown when the user has weak items for this type
-    if user_id and exercise_type in CONTENT:
+    # Single types pick by difficulty level (most-common cards first).
+    total  = len(CONTENT[exercise_type])
+    counts = Counter(item_level(i) for i in CONTENT[exercise_type])
+    text   = f"{TYPE_EMOJI.get(exercise_type, '🎯')} *{TYPE_LABEL[exercise_type]}*\n\nС чего начнём?"
+    rows: list[list[InlineKeyboardButton]] = []
+    for lvl in (1, 2, 3):
+        if counts.get(lvl):
+            rows.append([InlineKeyboardButton(
+                f"{LEVEL_LABEL[lvl]} — {counts[lvl]}", callback_data=f"lvl:{lvl}")])
+    rows.append([InlineKeyboardButton(f"📚 Все {total}", callback_data="lvl:all")])
+
+    if user_id:
         try:
             weak_deck = _build_weak_deck(exercise_type, user_id)
             if weak_deck:
-                wc = len(weak_deck)
                 rows.append([InlineKeyboardButton(
-                    f"🎯 Только ошибки ({wc})", callback_data="size:weak"
-                )])
+                    f"🎯 Только ошибки ({len(weak_deck)})", callback_data="size:weak")])
         except Exception:
             pass
 
@@ -1049,6 +1066,18 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ─── Callback handler ─────────────────────────────────────────────────────────
 
+async def _launch_session(context, query, chat_id, session, ex_type, last_size, type_mode):
+    """Common tail for starting a deck: remember it for «Ещё раунд», bind it to
+    the card message, and render the first card."""
+    context.user_data["last_type"] = ex_type
+    context.user_data["last_size"] = last_size
+    msg_id = context.user_data.get("card_message_id") or query.message.message_id
+    session["message_id"] = msg_id
+    context.user_data["card_message_id"] = msg_id
+    context.user_data["session"] = session
+    await show_card(chat_id, session, context.bot, type_mode=type_mode)
+
+
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Acknowledge the callback exactly once. A handler may answer with an alert
     popup; otherwise this fallback clears the button's loading spinner.
@@ -1167,27 +1196,31 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
-    if action == "size":
+    if action == "lvl":                       # difficulty tier for a single type
         ex_type = context.user_data.get("pending_type", "verbs")
+        if arg == "all":
+            session, last_size = new_session(ex_type, user_id=user_id), "all"
+        else:
+            deck = _level_deck(ex_type, int(arg))
+            if not deck:
+                await query.answer("На этом уровне карточек пока нет.", show_alert=True)
+                return
+            session, last_size = new_session(ex_type, deck=deck, user_id=user_id), f"lvl:{arg}"
+        await _launch_session(context, query, chat_id, session, ex_type, last_size, type_mode)
+        return
 
+    if action == "size":                      # mixed counts, or «только ошибки»
+        ex_type = context.user_data.get("pending_type", "verbs")
         if arg == "weak":
             weak_deck = _build_weak_deck(ex_type, user_id)
             if not weak_deck:
                 await query.answer("Ошибок пока нет!", show_alert=True)
                 return
-            session = new_session(ex_type, user_id=user_id, deck=weak_deck)
-            context.user_data["last_size"] = "weak"
+            session, last_size = new_session(ex_type, user_id=user_id, deck=weak_deck), "weak"
         else:
             size_map = {"10": 10, "20": 20, "30": 30, "all": None}
-            session  = new_session(ex_type, size=size_map[arg], user_id=user_id)
-            context.user_data["last_size"] = arg  # "10", "20", "30", "all"
-
-        context.user_data["last_type"] = ex_type
-        msg_id  = context.user_data.get("card_message_id") or query.message.message_id
-        session["message_id"] = msg_id
-        context.user_data["card_message_id"] = msg_id
-        context.user_data["session"] = session
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+            session, last_size = new_session(ex_type, size=size_map[arg], user_id=user_id), arg
+        await _launch_session(context, query, chat_id, session, ex_type, last_size, type_mode)
         return
 
     if data == "start_due":
@@ -1233,6 +1266,9 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await query.answer("Сейчас нечего повторять — загляни позже 👍", show_alert=True)
                 return
             session = new_session("review", user_id=user_id, deck=deck)
+        elif last_size.startswith("lvl:"):
+            deck = _level_deck(ex_type, int(last_size[4:]))
+            session = new_session(ex_type, deck=deck or None, user_id=user_id)
         else:
             size_map = {"10": 10, "20": 20, "30": 30, "all": None}
             session  = new_session(ex_type, size=size_map.get(last_size), user_id=user_id)
