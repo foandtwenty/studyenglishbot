@@ -151,22 +151,6 @@ def _card_plural_nom(n: int) -> str:
     return "карточек"
 
 
-def _progress_bar(session: dict) -> str:
-    if session.get("phase") == PHASE_END_REVIEW:
-        return ""
-    results = session["results"]
-    total   = session["original_total"]
-    if not total:
-        return ""
-    known   = sum(1 for v in results.values() if v)
-    unknown = sum(1 for v in results.values() if not v)
-    n = 10
-    k = round(known   * n / total)
-    u = min(round(unknown * n / total), n - k)
-    e = n - k - u
-    return "🟩" * k + "🟥" * u + "⬜️" * e
-
-
 def _verb_forms_text(item: dict) -> str:
     v1, v2, v3 = item["v1"], item["v2"], item["v3"]
     if v1 == v2 == v3:
@@ -263,7 +247,7 @@ def _progress_header(user_id: int | None) -> str:
 # Bump when the session dict shape changes incompatibly. Persisted sessions
 # (PicklePersistence) from older code are normalized on load; structurally
 # broken ones are dropped so a redeploy never crashes an active user.
-SESSION_VERSION = 1
+SESSION_VERSION = 2
 
 _SESSION_DEFAULTS: dict = {
     "exercise_type":  "verbs",
@@ -275,6 +259,8 @@ _SESSION_DEFAULTS: dict = {
     "message_id":     None,
     "awaiting_input": False,
     "user_id":        None,
+    "ever_wrong":     set(),       # cards missed at any point this session
+    "hint_used":      set(),       # cards where a hint was used (type mode)
 }
 
 
@@ -300,6 +286,8 @@ def new_session(exercise_type: str, size: int | None = None,
         "message_id":     None,
         "awaiting_input": False,
         "user_id":        user_id,
+        "ever_wrong":     set(),
+        "hint_used":      set(),
         "_v":             SESSION_VERSION,
     }
 
@@ -335,22 +323,18 @@ def _resume_info(context) -> tuple[int, int] | None:
 # ─── Progress line ────────────────────────────────────────────────────────────
 
 def progress_line(session: dict, item: dict) -> str:
-    emoji = TYPE_EMOJI.get(item_type(item), "📚")
-    bar   = _progress_bar(session)
-
     if session["phase"] == PHASE_END_REVIEW:
         pos   = session["pos"] + 1
         total = len(session["queue"])
-        return f"🔄 *Повторение {pos} / {total}*"
+        return f"_Повторение {pos} / {total}_"
 
     key    = card_key(item)
     is_new = key not in session["first_shown"]
     done   = len(session["first_shown"])
     total  = session["original_total"]
-
     counter = f"{done + 1} / {total}" if is_new else f"Повтор · {done} / {total}"
-    prefix  = emoji if is_new else "🔄"
-    return f"{prefix} *{counter}*\n{bar}"
+    prefix  = TYPE_EMOJI.get(item_type(item), "📚") if is_new else "🔄"
+    return f"{prefix} _{counter}_"
 
 
 # ─── Selectors ────────────────────────────────────────────────────────────────
@@ -574,12 +558,12 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
     cards = CONTENT[exercise_type]
     total = len(cards)
     try:
-        mastered = db.get_mastered_keys(user_id) if user_id else set()
+        known = db.get_known_keys(user_id) if user_id else set()
     except Exception:
-        mastered = set()
+        known = set()
 
     def done_of(items):
-        return sum(1 for i in items if card_key(i) in mastered)
+        return sum(1 for i in items if card_key(i) in known)
 
     text = (f"{TYPE_EMOJI.get(exercise_type, '🎯')} *{TYPE_LABEL[exercise_type]}*\n\n"
             f"С чего начнём?\n_цифры — освоено из всего_")
@@ -755,7 +739,8 @@ def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, In
     )
 
 
-def build_type_result(item: dict, user_input: str | None, correct: bool) -> tuple[str, InlineKeyboardMarkup]:
+def build_type_result(item: dict, user_input: str | None, correct: bool,
+                      hinted: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     forms     = _verb_forms_text(item)
     note_line = f"\n\n📖 _{item['note']}_" if item.get("note") else ""
     kb_next   = InlineKeyboardMarkup([
@@ -763,8 +748,10 @@ def build_type_result(item: dict, user_input: str | None, correct: bool) -> tupl
         [InlineKeyboardButton("⏸ Пауза",   callback_data="stop_session")],
     ])
     if correct:
+        head = ("🟡 *Верно, но с подсказкой* — повторим, чтобы запомнить:"
+                if hinted else "✅ *Верно!*")
         return (
-            f"✅ *Верно!*\n\n"
+            f"{head}\n\n"
             f"{forms}\n\n"
             f"💬 _{item['example']}_"
             f"{note_line}",
@@ -797,9 +784,7 @@ def build_end_review_intro(count: int) -> tuple[str, InlineKeyboardMarkup]:
 
 
 def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
-    results  = session["results"]
-    known    = sum(1 for v in results.values() if v)
-    unknown  = sum(1 for v in results.values() if not v)
+    results, known, unknown = _session_outcomes(session)
     total    = len(results)
     pct      = round(known / total * 100) if total else 0
     ex_type  = session["exercise_type"]
@@ -861,14 +846,12 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
         f"{unknown_block}"
     )
     kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔄 Ещё раунд", callback_data="repeat_session"),
-            InlineKeyboardButton("🏠 Другая тема", callback_data="new_session"),
-        ],
+        [InlineKeyboardButton("🔄 Ещё раунд", callback_data="repeat_session")],
         [
             InlineKeyboardButton("📋 Сложные", callback_data="final_weak"),
             InlineKeyboardButton("📈 История", callback_data="final_history"),
         ],
+        [InlineKeyboardButton("🏠 Другая тема", callback_data="new_session")],
     ])
     return text, kb
 
@@ -882,12 +865,24 @@ def mark_known(session: dict, item: dict) -> None:
 def mark_unknown(session: dict, item: dict) -> None:
     key = card_key(item)
     session["results"][key] = False
+    session.setdefault("ever_wrong", set()).add(key)   # missed at least once
     if session["phase"] != PHASE_MAIN:
         return
     if not any(card_key(v) == key for v, _ in session["review_buffer"]):
         session["review_buffer"].append((item, random.randint(2, 3)))
     if not any(card_key(v) == key for v in session["end_review"]):
         session["end_review"].append(item)
+
+
+def _session_outcomes(session: dict) -> tuple[dict, int, int]:
+    """Per-card effective outcome for stats: a card counts as known only if it
+    was never missed this session — an error anywhere (or a used hint) keeps it
+    as «ещё учу», so corrected-after-a-slip cards still surface in «Сложные».
+    Returns (effective {key: bool}, known, unknown)."""
+    ever = session.get("ever_wrong", set())
+    effective = {k: (v and k not in ever) for k, v in session["results"].items()}
+    known = sum(1 for v in effective.values() if v)
+    return effective, known, len(effective) - known
 
 
 def advance(session: dict) -> None:
@@ -954,10 +949,8 @@ async def show_results(chat_id: int, session: dict, bot) -> None:
     streak  = 0
     user_id = session.get("user_id")
     if user_id:
-        results = session["results"]
-        known   = sum(1 for v in results.values() if v)
-        unknown = sum(1 for v in results.values() if not v)
-        streak  = db.save_session(user_id, known, unknown, len(results), results)
+        effective, known, unknown = _session_outcomes(session)
+        streak = db.save_session(user_id, known, unknown, len(effective), effective)
 
     text, kb = build_final(session, streak)
     await safe_edit(bot, chat_id, session["message_id"], text, kb)
@@ -1376,6 +1369,11 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if item_type(item) != "verbs":
             return
         tm   = type_mode and session.get("exercise_type") == "verbs"
+        if tm:
+            # Using a hint while typing means you didn't recall it — it counts
+            # as «ещё учу» (won't be marked known even if you then type it right).
+            session.setdefault("hint_used", set()).add(card_key(item))
+            session.setdefault("ever_wrong", set()).add(card_key(item))
         prog = session.get("_last_progress") or progress_line(session, item)
         v2   = item["v2"].split("/")[0]
         v3   = item["v3"].split("/")[0]
@@ -1445,16 +1443,18 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     expected_v2 = _norm_forms(item["v2"])
     expected_v3 = _norm_forms(item["v3"])
     if set(expected_v2) == set(expected_v3):
-        # V2 == V3 (e.g. cut/cut/cut) — one word is enough.
-        correct = bool(parts) and parts[0] in expected_v2
+        # V2 == V3 (e.g. cut/cut/cut): one word is enough, but extra words must
+        # still be the right form — «sat sitten» is wrong, not correct.
+        correct = bool(parts) and all(p in expected_v2 for p in parts)
     else:
         correct = len(parts) >= 2 and parts[0] in expected_v2 and parts[-1] in expected_v3
 
-    text, kb = build_type_result(item, raw, correct)
-    if correct:
+    hinted = card_key(item) in session.get("hint_used", set())
+    text, kb = build_type_result(item, raw, correct, hinted=hinted)
+    if correct and not hinted:
         mark_known(session, item)
     else:
-        mark_unknown(session, item)
+        mark_unknown(session, item)        # wrong, or right-but-with-a-hint
     try:
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
     except BadRequest:

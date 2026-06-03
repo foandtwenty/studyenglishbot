@@ -187,3 +187,32 @@ def test_new_session_clears_paused(harness):
     harness.press("stop_session")
     harness.press("new_session")
     assert harness.ctx.user_data.get("session") is None
+
+
+def test_same_form_extra_wrong_word_is_wrong(harness):
+    """Regression: «sat sitten» for sit/sat/sat must be wrong, not accepted on
+    the first word alone."""
+    harness.press("pick:verbs")
+    harness.press("toggle_mode")
+    harness.press("lvl:all")
+    s = harness.ctx.user_data["session"]
+    same = next(i for i in s["queue"]
+                if set(bot._norm_forms(i["v2"])) == set(bot._norm_forms(i["v3"])))
+    s["queue"].insert(s["pos"], same)
+    harness.say(f"{same['v2']} totallywrong")
+    assert "Верно" not in harness.ctx.bot.edits[-1].text
+
+
+def test_hint_in_type_mode_marks_unknown(harness):
+    harness.press("pick:verbs")
+    harness.press("toggle_mode")
+    harness.press("lvl:1")
+    s = harness.ctx.user_data["session"]
+    item = bot.current_item(s)
+    harness.press("hint")
+    assert bot.card_key(item) in s["ever_wrong"]          # hint = «ещё учу»
+    harness.say(f"{item['v2']} {item['v3']}")             # correct, but hinted
+    assert "подсказкой" in harness.ctx.bot.edits[-1].text
+    # effective outcome counts it as not-known
+    eff, known, unknown = bot._session_outcomes(s)
+    assert eff[bot.card_key(item)] is False

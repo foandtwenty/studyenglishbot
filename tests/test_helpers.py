@@ -45,21 +45,6 @@ def test_verb_forms_text():
     assert "went" in out and "gone" in out
 
 
-def test_progress_bar_counts():
-    session = {
-        "phase": "main", "original_total": 10,
-        "results": {f"k{i}": True for i in range(5)} | {f"u{i}": False for i in range(3)},
-    }
-    bar = bot._progress_bar(session)
-    assert bar.count("🟩") == 5
-    assert bar.count("🟥") == 3
-    assert bar.count("⬜️") == 2
-
-
-def test_progress_bar_empty_when_no_total():
-    assert bot._progress_bar({"phase": "main", "original_total": 0, "results": {}}) == ""
-
-
 def test_card_plural_nominative():
     assert bot._card_plural_nom(1) == "карточка"
     assert bot._card_plural_nom(2) == "карточки"

@@ -179,16 +179,16 @@ def get_weak_ids(user_id: int) -> dict:
 
 
 def get_lifetime_stats(user_id: int) -> dict:
-    # "Mastered" = reached a long spaced-repetition interval (box ≥ 5, i.e.
-    # 15+ days); "learning" = scheduled but not there yet (box 1–4). This
-    # reflects the Leitner schedule rather than a raw correct/incorrect tally.
+    # "Mastered" = you get it right more often than wrong (known > unknown) —
+    # intuitive and visible after the first good session. "Learning" = the rest
+    # you've touched. (Spaced-repetition scheduling still uses the Leitner box.)
     with _conn() as c:
         mastered = c.execute(
-            "SELECT COUNT(*) FROM verb_stats WHERE user_id=? AND box >= 5",
+            "SELECT COUNT(*) FROM verb_stats WHERE user_id=? AND known_count > unknown_count",
             (user_id,),
         ).fetchone()[0]
         learning = c.execute(
-            "SELECT COUNT(*) FROM verb_stats WHERE user_id=? AND box BETWEEN 1 AND 4",
+            "SELECT COUNT(*) FROM verb_stats WHERE user_id=? AND known_count <= unknown_count",
             (user_id,),
         ).fetchone()[0]
         total_sessions = c.execute(
@@ -205,12 +205,13 @@ def get_lifetime_stats(user_id: int) -> dict:
     }
 
 
-def get_mastered_keys(user_id: int) -> set:
-    """Namespaced keys the user has mastered (Leitner box >= 5), for per-level
-    progress display."""
+def get_known_keys(user_id: int) -> set:
+    """Namespaced keys the user reliably knows (known_count > unknown_count),
+    for per-level «выучено» progress."""
     with _conn() as c:
         rows = c.execute(
-            "SELECT verb_v1 FROM verb_stats WHERE user_id=? AND box >= 5", (user_id,)
+            "SELECT verb_v1 FROM verb_stats WHERE user_id=? AND known_count > unknown_count",
+            (user_id,),
         ).fetchall()
     return {r["verb_v1"] for r in rows}
 

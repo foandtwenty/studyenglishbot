@@ -114,3 +114,13 @@ def test_normalize_does_not_share_mutable_defaults():
     b = bot.normalize_session({"queue": [], "results": {}})
     a["first_shown"].add("x")
     assert b["first_shown"] == set()       # independent objects
+
+
+def test_corrected_card_still_counts_as_missed():
+    """A card missed then corrected this session stays «ещё учу» so it surfaces
+    in Сложные and resets its schedule."""
+    s = bot.new_session("verbs", deck=[A])
+    bot.mark_unknown(s, A)        # slipped
+    bot.mark_known(s, A)          # corrected on the retry
+    eff, known, unknown = bot._session_outcomes(s)
+    assert eff[bot.card_key(A)] is False and known == 0 and unknown == 1
