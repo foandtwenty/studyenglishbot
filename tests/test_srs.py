@@ -49,16 +49,28 @@ def test_reminder_targets(db, fake_date):
     db.ensure_user(1)
     fake_date(_dt.date(2026, 1, 1))
     db.save_session(1, 1, 0, 1, {"go": True}, "verbs")     # due 01-02, studied 01-01
-    assert 1 in db.get_reminder_targets("2026-01-02")
+    fake_date(_dt.date(2026, 1, 2))
+    assert 1 in db.get_reminder_targets()
     db.set_reminders(1, False)
-    assert 1 not in db.get_reminder_targets("2026-01-02")  # opted out
+    assert 1 not in db.get_reminder_targets()              # opted out
 
 
 def test_reminder_targets_excludes_studied_today(db, fake_date):
     db.ensure_user(1)
     fake_date(_dt.date(2026, 1, 2))
     db.save_session(1, 1, 0, 1, {"go": True}, "verbs")     # studied today, due tomorrow
-    assert 1 not in db.get_reminder_targets("2026-01-02")
+    assert 1 not in db.get_reminder_targets()
+
+
+def test_reminder_targets_respects_personal_hour(db, fake_date):
+    db.ensure_user(1)
+    fake_date(_dt.date(2026, 1, 1))
+    db.save_session(1, 1, 0, 1, {"go": True}, "verbs")
+    db.set_reminder_hour(1, 19)
+    db.set_tz_offset(1, 3)                                  # 19 local, UTC+3 -> UTC 16
+    fake_date(_dt.date(2026, 1, 2))
+    assert db.get_reminder_targets(utc_hour=16) == [1]
+    assert db.get_reminder_targets(utc_hour=18) == []
 
 
 # ─── Interleaving & review decks (bot) ──────────────────────────────────────

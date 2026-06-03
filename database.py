@@ -227,28 +227,35 @@ def get_due_count(user_id: int, today: str | None = None) -> int:
         ).fetchone()[0]
 
 
-def get_reminder_targets(today: str | None = None, utc_hour: int | None = None) -> list:
-    """User ids who opted into reminders, have due cards, and haven't studied today.
+def get_reminder_targets(utc_hour: int | None = None) -> list:
+    """User ids to nudge: reminders on, a card due in THEIR local today, and no
+    study yet in their local today. Every day boundary uses the user's
+    tz_offset, consistent with how save_session stores last_study/next_due.
 
-    If `utc_hour` is given, only users whose personal reminder time falls on
-    that UTC hour are returned (local reminder_hour shifted by tz_offset).
+    If `utc_hour` is given, only users whose personal reminder hour maps to
+    that UTC hour are included.
     """
-    today = today or date.today().isoformat()
-    sql = """
-        SELECT DISTINCT u.user_id
-        FROM users u
-        JOIN verb_stats v ON v.user_id = u.user_id
-        WHERE u.reminders = 1
-          AND v.next_due IS NOT NULL AND v.next_due <= ?
-          AND (u.last_study IS NULL OR u.last_study < ?)
-    """
-    params: list = [today, today]
-    if utc_hour is not None:
-        sql += " AND ((u.reminder_hour - u.tz_offset) % 24 + 24) % 24 = ?"
-        params.append(utc_hour)
     with _conn() as c:
-        rows = c.execute(sql, params).fetchall()
-    return [r["user_id"] for r in rows]
+        users = c.execute(
+            "SELECT user_id, last_study, reminder_hour, tz_offset "
+            "FROM users WHERE reminders = 1"
+        ).fetchall()
+        out = []
+        for u in users:
+            tz = u["tz_offset"] or 0
+            if utc_hour is not None and (u["reminder_hour"] - tz) % 24 != utc_hour:
+                continue
+            today = (_now() + timedelta(hours=tz)).date().isoformat()
+            if u["last_study"] and u["last_study"] >= today:
+                continue                       # already studied in their today
+            due = c.execute(
+                "SELECT 1 FROM verb_stats WHERE user_id=? "
+                "AND next_due IS NOT NULL AND next_due <= ? LIMIT 1",
+                (u["user_id"], today),
+            ).fetchone()
+            if due:
+                out.append(u["user_id"])
+        return out
 
 
 def set_reminders(user_id: int, enabled: bool) -> None:

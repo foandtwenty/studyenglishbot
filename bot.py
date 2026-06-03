@@ -422,10 +422,12 @@ def build_menu_weak(user_id: int, back_callback: str = "back_to_types",
                 groups[ex_type].append((iid, r["unknown_count"]))
         lines: list[str] = []
         for ex_type in ("verbs", "vp", "adjprep", "prep"):
-            if groups[ex_type]:
+            grp = groups[ex_type]
+            if grp:
                 lines.append(f"\n{TYPE_EMOJI[ex_type]} *{TYPE_LABEL[ex_type]}*")
-                lines.extend(_format_weak_item(ex_type, iid, cnt)
-                             for iid, cnt in groups[ex_type][:10])
+                lines.extend(_format_weak_item(ex_type, iid, cnt) for iid, cnt in grp[:10])
+                if len(grp) > 10:
+                    lines.append(f"_…и ещё {len(grp) - 10}_")
         body = "\n".join(lines) if lines else (
             "Пока чисто! ✨\n"
             "Сюда попадут карточки, в которых ты ошибаешься. "
@@ -809,8 +811,8 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
     )
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔄 Ещё раз эту же",  callback_data="repeat_session"),
-            InlineKeyboardButton("🏠 Другая тема",      callback_data="new_session"),
+            InlineKeyboardButton("🔄 Ещё раунд", callback_data="repeat_session"),
+            InlineKeyboardButton("🏠 Другая тема", callback_data="new_session"),
         ],
         [
             InlineKeyboardButton("📋 Сложные", callback_data="final_weak"),
