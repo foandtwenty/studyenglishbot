@@ -364,15 +364,21 @@ def build_type_selector(welcome: bool = False,
 def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     streak      = db.get_streak(user_id)
     streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}*\n" if streak else ""
+    has_active = bool(session and session["results"])
     try:
         lt = db.get_lifetime_stats(user_id)
-        lifetime_block = (
-            f"\n🏆 *За всё время*\n"
-            f"📚 Карточек пройдено: *{lt['total_cards']}*\n"
-            f"🎓 Освоено: *{lt['mastered']}*\n"
-            f"🎯 Изучается: *{lt['learning']}*\n"
-            f"🗓 Сессий: *{lt['sessions']}*"
-        ) if lt["sessions"] > 0 else "\n_Заверши первую тренировку — и здесь появится статистика за всё время._"
+        if lt["sessions"] > 0:
+            lifetime_block = (
+                f"\n🏆 *За всё время*\n"
+                f"📚 Карточек пройдено: *{lt['total_cards']}*\n"
+                f"🎓 Освоено: *{lt['mastered']}*\n"
+                f"🎯 Изучается: *{lt['learning']}*\n"
+                f"🗓 Сессий: *{lt['sessions']}*"
+            )
+        elif has_active:
+            lifetime_block = ""      # the current-session block already shows progress
+        else:
+            lifetime_block = "\n_Заверши первую тренировку — и здесь появится статистика за всё время._"
     except Exception:
         logger.exception("Failed to load lifetime stats for user %s", user_id)
         lifetime_block = ""
@@ -549,8 +555,8 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
     if type_mode:
         text = (
             f"{prog}\n\n"
-            f"🔤 *{item['v1']}*\n"
-            f"🇷🇺 _{item['translation']}_\n\n"
+            f"*{item['v1']}*\n"
+            f"_{item['translation']}_\n\n"
             f"Нажми *Написать*, чтобы ввести V2 и V3:"
         )
         kb = InlineKeyboardMarkup([
@@ -561,8 +567,8 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
     else:
         text = (
             f"{prog}\n\n"
-            f"🔤 *{item['v1']}*\n"
-            f"🇷🇺 _{item['translation']}_\n\n"
+            f"*{item['v1']}*\n"
+            f"_{item['translation']}_\n\n"
             f"Вспомни формы — потом загляни в ответ:"
         )
         kb = InlineKeyboardMarkup([
@@ -581,7 +587,7 @@ def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     text  = (
         f"{prog}\n\n"
         f"{forms}\n"
-        f"🇷🇺 _{item['translation']}_\n\n"
+        f"_{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
         f"{note_line}"
     )
@@ -601,7 +607,7 @@ def build_prep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     text = (
         f"{progress_line(session, item)}\n\n"
         f"{sentence}\n"
-        f"🇷🇺 _{item['translation']}_\n\n"
+        f"_{item['translation']}_\n\n"
         f"Выбери правильный предлог:"
     )
     kb = InlineKeyboardMarkup([
@@ -619,8 +625,8 @@ def build_vp_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     item = current_item(session)
     text = (
         f"{progress_line(session, item)}\n\n"
-        f"🔤 *{_vp_display(item)}*\n"
-        f"🇷🇺 _{item['translation']}_\n\n"
+        f"*{_vp_display(item)}*\n"
+        f"_{item['translation']}_\n\n"
         f"Какой шаблон?"
     )
     kb = InlineKeyboardMarkup([
@@ -640,8 +646,8 @@ def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     rng.shuffle(options)
     text = (
         f"{progress_line(session, item)}\n\n"
-        f"🔤 *{item['adjective']}* + ?\n"
-        f"🇷🇺 _{item['translation']}_\n\n"
+        f"*{item['adjective']}* + ?\n"
+        f"_{item['translation']}_\n\n"
         f"Выбери правильный предлог:"
     )
     kb = InlineKeyboardMarkup([
@@ -716,7 +722,7 @@ def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, 
     return (
         f"❌ *Твой ответ:* `{_sanitize_user_text(user_input)}`\n\n"
         f"{forms}\n"
-        f"🇷🇺 _{item['translation']}_\n\n"
+        f"_{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
         f"{note_line}",
         kb_next,
@@ -1280,8 +1286,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if tm:
             text = (
                 f"{prog}\n\n"
-                f"🔤 *{item['v1']}*\n"
-                f"🇷🇺 _{item['translation']}_\n\n"
+                f"*{item['v1']}*\n"
+                f"_{item['translation']}_\n\n"
                 f"{hint_line}\n\n"
                 f"Нажми *Написать*, чтобы ввести V2 и V3:"
             )
@@ -1292,8 +1298,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             text = (
                 f"{prog}\n\n"
-                f"🔤 *{item['v1']}*\n"
-                f"🇷🇺 _{item['translation']}_\n\n"
+                f"*{item['v1']}*\n"
+                f"_{item['translation']}_\n\n"
                 f"{hint_line}\n\n"
                 f"Вспомни формы — потом загляни в ответ:"
             )
