@@ -67,7 +67,7 @@ HELP_TEXT = (
     "Сначала вспоминаешь сам, затем смотришь ответ и честно оцениваешь.\n"
     "Ошибочные карточки возвращаются через 2–3 хода и снова в конце.\n\n"
     "*Интервальное повторение:*\n"
-    "🔔 *К повторению* собирает карточки, которым пора освежиться: сложные "
+    "🔔 *Повторить* собирает карточки, которым пора освежиться: сложные "
     "(где ты ошибался) идут первыми и возвращаются часто, а верные — по "
     "растущим интервалам (1, 2, 4, 7… дней), чтобы не забылись.\n\n"
     "*В главном меню:*\n"
@@ -381,7 +381,7 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
     due = _due_count(user_id)
     if due:
         rows.append([InlineKeyboardButton(
-            f"🔔 К повторению ({due})", callback_data="start_due")])
+            f"🔔 Повторить ({due})", callback_data="start_due")])
     rows += [
         [InlineKeyboardButton("🔤 Неправильные глаголы",     callback_data="pick:verbs")],
         [InlineKeyboardButton("📍 Предлоги in / on / at",    callback_data="pick:prep")],
@@ -570,16 +570,28 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
         ], [InlineKeyboardButton("← Назад", callback_data="back_to_types")]]
         return text, InlineKeyboardMarkup(rows)
 
-    # Single types pick by difficulty level (most-common cards first).
-    total  = len(CONTENT[exercise_type])
-    counts = Counter(item_level(i) for i in CONTENT[exercise_type])
-    text   = f"{TYPE_EMOJI.get(exercise_type, '🎯')} *{TYPE_LABEL[exercise_type]}*\n\nС чего начнём?"
+    # Single types pick by difficulty level, with «освоено / всего» progress.
+    cards = CONTENT[exercise_type]
+    total = len(cards)
+    try:
+        mastered = db.get_mastered_keys(user_id) if user_id else set()
+    except Exception:
+        mastered = set()
+
+    def done_of(items):
+        return sum(1 for i in items if card_key(i) in mastered)
+
+    text = (f"{TYPE_EMOJI.get(exercise_type, '🎯')} *{TYPE_LABEL[exercise_type]}*\n\n"
+            f"С чего начнём?\n_цифры — освоено из всего_")
     rows: list[list[InlineKeyboardButton]] = []
     for lvl in (1, 2, 3):
-        if counts.get(lvl):
+        lvl_items = [i for i in cards if item_level(i) == lvl]
+        if lvl_items:
             rows.append([InlineKeyboardButton(
-                f"{LEVEL_LABEL[lvl]} — {counts[lvl]}", callback_data=f"lvl:{lvl}")])
-    rows.append([InlineKeyboardButton(f"📚 Все {total}", callback_data="lvl:all")])
+                f"{LEVEL_LABEL[lvl]} · {done_of(lvl_items)}/{len(lvl_items)}",
+                callback_data=f"lvl:{lvl}")])
+    rows.append([InlineKeyboardButton(
+        f"📚 Все · {done_of(cards)}/{total}", callback_data="lvl:all")])
 
     if user_id:
         try:
@@ -1473,7 +1485,7 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             if not cnt:
                 continue
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"🔔 К повторению ({cnt})", callback_data="start_due")],
+                [InlineKeyboardButton(f"🔔 Повторить ({cnt})", callback_data="start_due")],
                 [InlineKeyboardButton("🔕 Отключить", callback_data="reminders_off")],
             ])
             await context.bot.send_message(

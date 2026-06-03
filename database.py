@@ -205,6 +205,16 @@ def get_lifetime_stats(user_id: int) -> dict:
     }
 
 
+def get_mastered_keys(user_id: int) -> set:
+    """Namespaced keys the user has mastered (Leitner box >= 5), for per-level
+    progress display."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT verb_v1 FROM verb_stats WHERE user_id=? AND box >= 5", (user_id,)
+        ).fetchall()
+    return {r["verb_v1"] for r in rows}
+
+
 def get_due_ids(user_id: int, today: str | None = None) -> list:
     """Namespaced keys of cards whose spaced-repetition review is due."""
     with _conn() as c:
