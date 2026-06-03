@@ -1040,8 +1040,21 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ─── Callback handler ─────────────────────────────────────────────────────────
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Acknowledge the callback exactly once. A handler may answer with an alert
+    popup; otherwise this fallback clears the button's loading spinner.
+    Telegram rejects a second answer to the same query, so it's guarded."""
+    query = update.callback_query
+    try:
+        await _on_button_impl(update, context)
+    finally:
+        try:
+            await query.answer()
+        except BadRequest:
+            pass
+
+
+async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query        = update.callback_query
-    await query.answer()
     data         = query.data
     action, arg  = parse_callback(data)     # ("pick"|"size"|"ans", value) or (data, None)
     chat_id      = query.message.chat_id
