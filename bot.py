@@ -170,7 +170,7 @@ def _progress_bar(session: dict) -> str:
 def _verb_forms_text(item: dict) -> str:
     v1, v2, v3 = item["v1"], item["v2"], item["v3"]
     if v1 == v2 == v3:
-        return f"✅ Все формы одинаковые: `{v1}`"
+        return f"Все формы одинаковые: `{v1}`"
     if v2 == v3:
         return f"*V2 = V3:* `{v2}`"
     return f"*V2:* `{v2}`\n*V3:* `{v3}`"
@@ -248,9 +248,9 @@ def _progress_header(user_id: int | None) -> str:
     lines = []
     if streak:
         lines.append(f"🔥 Серия: *{streak} {_streak_label(streak)}*")
-    second = f"🎓 Освоено: *{lt['mastered']}*"
+    second = f"Освоено: *{lt['mastered']}*"
     if lt["learning"]:
-        second += f"  ·  🎯 Изучается: *{lt['learning']}*"
+        second += f"  ·  Изучается: *{lt['learning']}*"
     lines.append(second)
     return "\n".join(lines)
 
@@ -403,10 +403,10 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
         if lt["sessions"] > 0:
             lifetime_block = (
                 f"\n🏆 *За всё время*\n"
-                f"📚 Карточек пройдено: *{lt['total_cards']}*\n"
-                f"🎓 Освоено: *{lt['mastered']}*\n"
-                f"🎯 Изучается: *{lt['learning']}*\n"
-                f"🗓 Сессий: *{lt['sessions']}*"
+                f"Карточек пройдено: *{lt['total_cards']}*\n"
+                f"Освоено: *{lt['mastered']}*\n"
+                f"Изучается: *{lt['learning']}*\n"
+                f"Сессий: *{lt['sessions']}*"
             )
         elif has_active:
             lifetime_block = ""      # the current-session block already shows progress
@@ -423,15 +423,15 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
         studied = len(results)
         total   = session["original_total"]
         ex_type = session["exercise_type"]
-        known_line   = f"✅ Знаю: *{known}*\n" if known else ""
-        unknown_line = f"❌ Ещё учу: *{unknown}*\n" if unknown else ""
+        known_line   = f"Знаю: *{known}*\n" if known else ""
+        unknown_line = f"Ещё учу: *{unknown}*\n" if unknown else ""
         current_block = (
             f"📊 *Текущая сессия*\n"
             f"_{TYPE_LABEL.get(ex_type, '')}_\n\n"
             f"{known_line}"
             f"{unknown_line}"
-            f"📚 Пройдено: *{studied} / {total}*\n"
-            f"⏳ Осталось: *{total - studied}*\n"
+            f"Пройдено: *{studied} / {total}*\n"
+            f"Осталось: *{total - studied}*\n"
             f"{streak_line}"
         )
     else:
@@ -818,16 +818,16 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
                 short = iid.replace("{?}", f"[{p['answer']}]")
                 lines.append(f"• _{short}_")
         if lines:
-            unknown_block = "\n\n📋 *Повтори:*\n" + "\n".join(lines)
+            unknown_block = "\n\n*Повтори:*\n" + "\n".join(lines)
 
-    known_line   = f"✅ Знаю: *{known}* {_card_plural(known)}\n" if known else ""
-    unknown_line = f"❌ Ещё учу: *{unknown}* {_card_plural(unknown)}\n" if unknown else ""
+    known_line   = f"Знаю: *{known}* {_card_plural(known)}\n" if known else ""
+    unknown_line = f"Ещё учу: *{unknown}* {_card_plural(unknown)}\n" if unknown else ""
     text = (
         f"🎉 *Сессия завершена!*\n"
         f"{subtitle}"
         f"{known_line}"
         f"{unknown_line}"
-        f"📊 Результат: *{pct}%*\n"
+        f"Результат: *{pct}%*\n"
         f"{streak_line}"
         f"\n{grade}"
         f"{unknown_block}"
