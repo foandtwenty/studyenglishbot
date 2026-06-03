@@ -58,3 +58,12 @@ def test_progress_bar_counts():
 
 def test_progress_bar_empty_when_no_total():
     assert bot._progress_bar({"phase": "main", "original_total": 0, "results": {}}) == ""
+
+
+def test_card_plural_nominative():
+    assert bot._card_plural_nom(1) == "карточка"
+    assert bot._card_plural_nom(2) == "карточки"
+    assert bot._card_plural_nom(4) == "карточки"
+    assert bot._card_plural_nom(5) == "карточек"
+    assert bot._card_plural_nom(11) == "карточек"
+    assert bot._card_plural_nom(21) == "карточка"

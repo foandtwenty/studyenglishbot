@@ -120,7 +120,15 @@ def _streak_label(n: int) -> str:
 
 
 def _card_plural(n: int) -> str:
+    """Accusative — for «знаю N карточек», «учу N карточек»."""
     if n % 10 == 1 and n % 100 != 11:                  return "карточку"
+    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return "карточки"
+    return "карточек"
+
+
+def _card_plural_nom(n: int) -> str:
+    """Nominative — for labels like «тема · N карточек», «К повторению: N»."""
+    if n % 10 == 1 and n % 100 != 11:                  return "карточка"
     if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return "карточки"
     return "карточек"
 
@@ -745,7 +753,7 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
 
     streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}*\n" if streak else ""
 
-    size_label = f"{session['original_total']} {_card_plural(session['original_total'])}"
+    size_label = f"{session['original_total']} {_card_plural_nom(session['original_total'])}"
     subtitle   = f"_{TYPE_LABEL.get(ex_type, '')} · {size_label}_\n\n"
 
     unknown_keys  = [k for k, ok in results.items() if not ok]
@@ -1049,7 +1057,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if session and session["results"]:
             done  = len(session["results"])
             known = sum(1 for v in session["results"].values() if v)
-            note  = f"_Сессия прервана — {known} из {done} {_card_plural(done)} пройдено_\n\n"
+            note  = f"_Сессия прервана. Пройдено: {known} из {done}._\n\n"
             text  = note + text
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
@@ -1386,7 +1394,7 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(
                 uid,
                 f"🔔 *Пора повторить!*\n\n"
-                f"Готово к повторению: *{cnt}* {_card_plural(cnt)}.\n"
+                f"К повторению: *{cnt}* {_card_plural_nom(cnt)}.\n"
                 f"Несколько минут — и слова закрепятся надолго 💪",
                 parse_mode="Markdown", reply_markup=kb,
             )
