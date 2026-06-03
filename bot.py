@@ -78,9 +78,10 @@ HELP_TEXT = (
     "Выбери уровень — 🟢 Базовый (самые частые), 🟡 Средний, 🔴 Продвинутый "
     "— или «📚 Все».\n"
     "🎯 Только ошибки — тренировать лишь сложные карточки\n"
-    "✏️ Режим ввода — печатать V2 и V3 вместо кнопок\n\n"
+    "✏️ Режим ввода — печатай формы вместо кнопок (проверка выученного)\n\n"
     "*На карточке глагола:*\n"
-    "💡 Подсказка — первая буква и длина V2"
+    "💡 Подсказка — первые буквы и длина V2/V3\n"
+    "В режиме ввода просто отправь V2 и V3 в чат; «❓ Не помню» покажет ответ"
 )
 
 
@@ -177,6 +178,11 @@ def _verb_forms_text(item: dict) -> str:
 
 def _vp_display(item: dict) -> str:
     return item["verb"].split("  ")[0].strip()
+
+
+def _norm_forms(s: str) -> list[str]:
+    """Accepted spellings of a verb form, e.g. 'was/were' -> ['was','were']."""
+    return s.lower().replace("/", " ").split()
 
 
 def _sanitize_user_text(s: str) -> str:
@@ -586,12 +592,12 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
             f"{prog}\n\n"
             f"*{item['v1']}*\n"
             f"_{item['translation']}_\n\n"
-            f"Нажми *Написать*, чтобы ввести V2 и V3:"
+            f"✍️ Напиши V2 и V3 через пробел:"
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Написать",  callback_data="type_answer")],
             [InlineKeyboardButton("💡 Подсказка", callback_data="hint")],
-            [InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session")],
+            [InlineKeyboardButton("❓ Не помню",  callback_data="reveal"),
+             InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session")],
         ])
     else:
         text = (
@@ -721,19 +727,7 @@ def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, In
     )
 
 
-def build_type_prompt(session: dict) -> tuple[str, InlineKeyboardMarkup]:
-    item = current_item(session)
-    prog = session.get("_last_progress") or progress_line(session, item)
-    text = (
-        f"{prog}\n\n"
-        f"✍️ *{item['v1']}* — _{item['translation']}_\n\n"
-        f"Напиши V2 и V3 через пробел:"
-    )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="cancel_type")]])
-    return text, kb
-
-
-def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, InlineKeyboardMarkup]:
+def build_type_result(item: dict, user_input: str | None, correct: bool) -> tuple[str, InlineKeyboardMarkup]:
     forms     = _verb_forms_text(item)
     note_line = f"\n\n📖 _{item['note']}_" if item.get("note") else ""
     kb_next   = InlineKeyboardMarkup([
@@ -748,8 +742,10 @@ def build_type_result(item: dict, user_input: str, correct: bool) -> tuple[str, 
             f"{note_line}",
             kb_next,
         )
+    head = ("❌ *Не помню* — вот формы:" if user_input is None
+            else f"❌ *Твой ответ:* `{_sanitize_user_text(user_input)}`")
     return (
-        f"❌ *Твой ответ:* `{_sanitize_user_text(user_input)}`\n\n"
+        f"{head}\n\n"
         f"{forms}\n"
         f"_{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
@@ -899,8 +895,8 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
         return
 
     ex_type = item_type(item)          # per-card, so mixed/review decks work
+    tm = type_mode and ex_type == "verbs" and session.get("exercise_type") == "verbs"
     if ex_type == "verbs":
-        tm = type_mode and session.get("exercise_type") == "verbs"
         text, kb = build_verb_card(session, type_mode=tm)
     elif ex_type == "prep":
         text, kb = build_prep_card(session)
@@ -909,6 +905,8 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
     else:
         text, kb = build_vp_card(session)
 
+    # In type mode the card itself is the prompt — accept a typed answer right away.
+    session["awaiting_input"] = tm
     session["_last_progress"] = progress_line(session, item)
     await safe_edit(bot, chat_id, session["message_id"], text, kb)
     session["first_shown"].add(card_key(item))
@@ -1344,31 +1342,24 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data == "hint":
         if item_type(item) != "verbs":
             return
-        tm        = type_mode and session.get("exercise_type") == "verbs"
-        prog      = session.get("_last_progress") or progress_line(session, item)
-        v2        = item["v2"].split("/")[0]
-        first     = v2[0].lower()
-        hint_line = f"💡 V2 начинается на: *{first}...* ({len(v2)} букв)"
+        tm   = type_mode and session.get("exercise_type") == "verbs"
+        prog = session.get("_last_progress") or progress_line(session, item)
+        v2   = item["v2"].split("/")[0]
+        v3   = item["v3"].split("/")[0]
+        if set(_norm_forms(item["v2"])) == set(_norm_forms(item["v3"])):
+            hint_line = f"💡 Форма на *{v2[0].lower()}…* ({len(v2)} букв)"
+        else:
+            hint_line = (f"💡 V2 на *{v2[0].lower()}…* ({len(v2)}) · "
+                         f"V3 на *{v3[0].lower()}…* ({len(v3)})")
+        base = (f"{prog}\n\n*{item['v1']}*\n_{item['translation']}_\n\n{hint_line}")
         if tm:
-            text = (
-                f"{prog}\n\n"
-                f"*{item['v1']}*\n"
-                f"_{item['translation']}_\n\n"
-                f"{hint_line}\n\n"
-                f"Нажми *Написать*, чтобы ввести V2 и V3:"
-            )
+            text = f"{base}\n\n✍️ Напиши V2 и V3 через пробел:"
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ Написать", callback_data="type_answer")],
-                [InlineKeyboardButton("⏹ Стоп",      callback_data="stop_session")],
+                [InlineKeyboardButton("❓ Не помню", callback_data="reveal"),
+                 InlineKeyboardButton("⏹ Стоп",     callback_data="stop_session")],
             ])
         else:
-            text = (
-                f"{prog}\n\n"
-                f"*{item['v1']}*\n"
-                f"_{item['translation']}_\n\n"
-                f"{hint_line}\n\n"
-                f"Вспомни формы — потом загляни в ответ:"
-            )
+            text = f"{base}\n\nВспомни формы — потом загляни в ответ:"
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
                 [InlineKeyboardButton("⏹ Стоп",            callback_data="stop_session")],
@@ -1385,14 +1376,11 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         advance(session)
         await show_card(chat_id, session, context.bot, type_mode=type_mode)
 
-    elif data == "type_answer":
-        session["awaiting_input"] = True
-        text, kb = build_type_prompt(session)
-        await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
-
-    elif data == "cancel_type":
+    elif data == "reveal":                     # «Не помню» in type mode → show forms
         session["awaiting_input"] = False
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+        mark_unknown(session, item)
+        text, kb = build_type_result(item, None, correct=False)
+        await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
 
     elif data == "next":
         advance(session)
@@ -1419,11 +1407,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
     raw   = update.message.text.strip()
-    parts = raw.lower().replace("/", " ").split()
+    parts = _norm_forms(raw)
 
-    expected_v2 = item["v2"].lower().replace("/", " ").split()
-    expected_v3 = item["v3"].lower().replace("/", " ").split()
-    correct = len(parts) >= 2 and parts[0] in expected_v2 and parts[-1] in expected_v3
+    expected_v2 = _norm_forms(item["v2"])
+    expected_v3 = _norm_forms(item["v3"])
+    if set(expected_v2) == set(expected_v3):
+        # V2 == V3 (e.g. cut/cut/cut) — one word is enough.
+        correct = bool(parts) and parts[0] in expected_v2
+    else:
+        correct = len(parts) >= 2 and parts[0] in expected_v2 and parts[-1] in expected_v3
 
     text, kb = build_type_result(item, raw, correct)
     if correct:

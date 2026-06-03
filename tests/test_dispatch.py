@@ -63,7 +63,13 @@ def harness(tmp_path, monkeypatch):
         asyncio.run(bot.on_button(SimpleNamespace(callback_query=q), ctx))
         return q
 
-    return SimpleNamespace(ctx=ctx, press=press)
+    def say(text):
+        msg = _Msg()
+        msg.text = text
+        upd = SimpleNamespace(effective_chat=SimpleNamespace(id=100), message=msg)
+        asyncio.run(bot.on_text(upd, ctx))
+
+    return SimpleNamespace(ctx=ctx, press=press, say=say)
 
 
 def test_normal_branch_acks_exactly_once(harness):
@@ -89,15 +95,45 @@ def test_pick_then_level_creates_session(harness):
     assert all(bot.item_level(i) == 1 for i in s["queue"])
 
 
-def test_type_answer_reaches_input_prompt(harness):
-    """Regression: «Написать» (type_answer) must open the input prompt, not be
-    swallowed by the exercise-type selector."""
+def test_type_mode_accepts_text_without_a_button(harness):
+    """Type mode: the card itself is the prompt — typing is accepted right away,
+    no «Написать» step."""
     harness.press("pick:verbs")
     harness.press("toggle_mode")
     harness.press("lvl:1")
-    harness.press("type_answer")
-    assert harness.ctx.user_data["session"]["awaiting_input"] is True
-    assert "Напиши" in harness.ctx.bot.edits[-1].text
+    s = harness.ctx.user_data["session"]
+    assert s["awaiting_input"] is True                # ready to accept text
+    assert "type_answer" not in str(harness.ctx.bot.edits[-1].kb)   # no Написать button
+
+    item = bot.current_item(s)
+    harness.say(f"{item['v2']} {item['v3']}")         # correct answer typed directly
+    assert "Верно" in harness.ctx.bot.edits[-1].text
+    assert s["results"][bot.card_key(item)] is True
+
+
+def test_type_mode_same_form_single_word(harness):
+    """A V2==V3 verb (e.g. put/put/put) is accepted with one word."""
+    harness.press("pick:verbs")
+    harness.press("toggle_mode")
+    harness.press("lvl:all")
+    s = harness.ctx.user_data["session"]
+    # find a same-form verb in the deck
+    same = next(i for i in s["queue"]
+                if set(bot._norm_forms(i["v2"])) == set(bot._norm_forms(i["v3"])))
+    s["queue"].insert(s["pos"], same)                 # bring it to the front
+    harness.say(same["v2"])                            # one word
+    assert "Верно" in harness.ctx.bot.edits[-1].text
+
+
+def test_reveal_shows_forms_and_marks_unknown(harness):
+    harness.press("pick:verbs")
+    harness.press("toggle_mode")
+    harness.press("lvl:1")
+    s = harness.ctx.user_data["session"]
+    item = bot.current_item(s)
+    harness.press("reveal")
+    assert "Не помню" in harness.ctx.bot.edits[-1].text
+    assert s["results"][bot.card_key(item)] is False
 
 
 def test_stale_session_shows_notice(harness):
