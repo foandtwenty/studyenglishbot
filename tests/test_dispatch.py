@@ -216,3 +216,33 @@ def test_hint_in_type_mode_marks_unknown(harness):
     # effective outcome counts it as not-known
     eff, known, unknown = bot._session_outcomes(s)
     assert eff[bot.card_key(item)] is False
+
+
+def test_crafted_size_and_lvl_callbacks_do_not_crash(harness):
+    """A bot-API client could send size:99 / lvl:xyz; these must be ignored,
+    not raise KeyError/ValueError into the error handler."""
+    harness.press("pick:verbs")
+    harness.press("size:99")                          # not in size_map
+    harness.press("lvl:xyz")                          # int() would raise
+    assert harness.ctx.user_data.get("session") is None
+
+
+def test_type_mode_applies_to_verb_card_in_mixed(harness):
+    harness.press("toggle_mode")                      # type mode on
+    harness.press("pick:mixed")
+    harness.press("size:30")
+    s = harness.ctx.user_data["session"]
+    # advance to the first verb card and check it accepts input
+    for _ in range(40):
+        cur = bot.current_item(s)
+        if cur is None:
+            break
+        if bot.item_type(cur) == "verbs":
+            # re-render to apply gating for this card
+            import asyncio
+            asyncio.run(bot.show_card(100, s, harness.ctx.bot, type_mode=True))
+            assert s["awaiting_input"] is True
+            return
+        ca = cur.get("answer") or cur.get("pattern") or cur.get("preposition")
+        harness.press(f"ans:{ca}"); harness.press("next")
+    # if no verb appeared in 30 mixed cards that's fine; nothing to assert

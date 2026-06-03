@@ -24,8 +24,12 @@ MAX_BOX = 6
 
 
 def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5)
     conn.row_factory = sqlite3.Row
+    # WAL lets readers and a writer coexist; busy_timeout waits out a brief lock
+    # instead of failing immediately. Cheap insurance even for a single instance.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -80,7 +84,7 @@ def init_db() -> None:
 
 def ensure_user(user_id: int) -> bool:
     """Insert user if not exists. Returns True if user is new."""
-    today = date.today().isoformat()
+    today = _now().date().isoformat()        # UTC, consistent with the rest
     with _conn() as c:
         existing = c.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,)).fetchone()
         if existing:

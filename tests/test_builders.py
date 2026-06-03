@@ -152,16 +152,14 @@ def test_mixed_size_selector_caps_and_has_no_all():
     assert "size:all" not in flat            # no «Все 249»
 
 
-def test_type_mode_only_applies_to_pure_verbs_deck():
-    """Режим ввода активен лишь в чистой колоде глаголов, не в миксе."""
+def test_type_mode_applies_to_verb_cards_in_any_deck():
+    """Input mode applies to a verb card regardless of the deck (pure verbs,
+    mixed, or review) — only non-verb cards stay button-only."""
     verb = {"v1": "go", "v2": "went", "v3": "gone", "translation": "идти", "example": "e"}
-    pure = bot.new_session("verbs", deck=[verb]); pure["message_id"] = 1
-    mixed = bot.new_session("mixed", deck=[verb]); mixed["message_id"] = 1
-
-    # build_verb_card itself honours the flag; the gating happens in show_card,
-    # so assert the gating expression directly for both session kinds.
-    assert (True and pure.get("exercise_type") == "verbs") is True
-    assert (True and mixed.get("exercise_type") == "verbs") is False
+    prep = {"sentence": "X {?} Y.", "answer": "in", "translation": "т", "rule": "r"}
+    # the show_card gating expression: tm = type_mode and item_type == "verbs"
+    assert (True and bot.item_type(verb) == "verbs") is True
+    assert (True and bot.item_type(prep) == "verbs") is False
 
 
 def test_single_type_selector_shows_levels_not_counts():

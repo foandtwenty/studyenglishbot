@@ -218,6 +218,7 @@ def _due_count(user_id: int | None) -> int:
     try:
         return len(set(db.get_due_ids(user_id)) & ALL_CARD_KEYS)
     except Exception:
+        logger.exception("due count failed for user %s", user_id)
         return 0
 
 
@@ -918,7 +919,7 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
         return
 
     ex_type = item_type(item)          # per-card, so mixed/review decks work
-    tm = type_mode and ex_type == "verbs" and session.get("exercise_type") == "verbs"
+    tm = type_mode and ex_type == "verbs"   # input applies to any verb card
     if ex_type == "verbs":
         text, kb = build_verb_card(session, type_mode=tm)
     elif ex_type == "prep":
@@ -1223,12 +1224,14 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ex_type = context.user_data.get("pending_type", "verbs")
         if arg == "all":
             session, last_size = new_session(ex_type, user_id=user_id), "all"
-        else:
+        elif arg in ("1", "2", "3"):
             deck = _level_deck(ex_type, int(arg))
             if not deck:
                 await query.answer("На этом уровне карточек пока нет.", show_alert=True)
                 return
             session, last_size = new_session(ex_type, deck=deck, user_id=user_id), f"lvl:{arg}"
+        else:
+            return                            # ignore any crafted lvl:<garbage>
         await _launch_session(context, query, chat_id, session, ex_type, last_size, type_mode)
         return
 
@@ -1242,6 +1245,8 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             session, last_size = new_session(ex_type, user_id=user_id, deck=weak_deck), "weak"
         else:
             size_map = {"10": 10, "20": 20, "30": 30, "all": None}
+            if arg not in size_map:
+                return                        # ignore any crafted size:<garbage>
             session, last_size = new_session(ex_type, size=size_map[arg], user_id=user_id), arg
         await _launch_session(context, query, chat_id, session, ex_type, last_size, type_mode)
         return
@@ -1292,7 +1297,10 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             session = new_session("review", user_id=user_id, deck=deck)
         elif last_size.startswith("lvl:"):
             deck = _level_deck(ex_type, int(last_size[4:]))
-            session = new_session(ex_type, deck=deck or None, user_id=user_id)
+            if not deck:
+                await query.answer("На этом уровне карточек пока нет.", show_alert=True)
+                return
+            session = new_session(ex_type, deck=deck, user_id=user_id)
         else:
             size_map = {"10": 10, "20": 20, "30": 30, "all": None}
             session  = new_session(ex_type, size=size_map.get(last_size), user_id=user_id)
@@ -1368,7 +1376,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data == "hint":
         if item_type(item) != "verbs":
             return
-        tm   = type_mode and session.get("exercise_type") == "verbs"
+        tm   = type_mode             # item is a verb here; input applies anywhere
         if tm:
             # Using a hint while typing means you didn't recall it — it counts
             # as «ещё учу» (won't be marked known even if you then type it right).
