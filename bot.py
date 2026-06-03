@@ -366,7 +366,7 @@ def build_menu_profile(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("📈 История",    callback_data="menu_history"),
             InlineKeyboardButton("❓ Помощь",     callback_data="menu_help"),
         ],
-        [InlineKeyboardButton("← Главное меню", callback_data="back_to_types")],
+        [InlineKeyboardButton("← Назад", callback_data="back_to_types")],
     ])
     return text, kb
 
@@ -1424,7 +1424,7 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             if not cnt:
                 continue
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"🚀 Повторить ({cnt})", callback_data="start_due")],
+                [InlineKeyboardButton(f"🔔 К повторению ({cnt})", callback_data="start_due")],
                 [InlineKeyboardButton("🔕 Отключить", callback_data="reminders_off")],
             ])
             await context.bot.send_message(
