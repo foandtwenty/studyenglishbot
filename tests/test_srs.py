@@ -159,3 +159,20 @@ def test_tz_offset_clamped(db):
     assert db.get_reminder_settings(1)["tz"] == 14
     db.set_tz_offset(1, -99)
     assert db.get_reminder_settings(1)["tz"] == -12
+
+
+def test_review_deck_orders_hardest_first(db):
+    import datetime as _dt
+    db.ensure_user(1)
+    db.save_session(1, 0, 1, 1, {"verbs::go": False}, None)     # 1 error
+    for _ in range(3):
+        db.save_session(1, 0, 1, 1, {"verbs::make": False}, None)  # 3 errors
+    db.save_session(1, 1, 0, 1, {"verbs::do": True}, None)      # correct, 0 errors
+    # jump ahead so all are due
+    future = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=40)
+    import database
+    database._now = lambda: future
+    deck = bot._build_review_deck(1)
+    ids = [bot.item_id(i) for i in deck]
+    assert ids.index("make") < ids.index("go") < ids.index("do")   # most errors first
+    database._now = lambda: _dt.datetime.now(_dt.timezone.utc)

@@ -67,9 +67,9 @@ HELP_TEXT = (
     "Сначала вспоминаешь сам, затем смотришь ответ и честно оцениваешь.\n"
     "Ошибочные карточки возвращаются через 2–3 хода и снова в конце.\n\n"
     "*Интервальное повторение:*\n"
-    "Карточки возвращаются по растущим интервалам (1, 2, 4, 7… дней) — "
-    "так память закрепляется надолго. Кнопка 🔔 *К повторению* в меню "
-    "показывает, что пора освежить.\n\n"
+    "🔔 *К повторению* собирает карточки, которым пора освежиться: сложные "
+    "(где ты ошибался) идут первыми и возвращаются часто, а верные — по "
+    "растущим интервалам (1, 2, 4, 7… дней), чтобы не забылись.\n\n"
     "*В главном меню:*\n"
     "🎲 Всё вперемешку — карточки всех типов сразу\n"
     "📊 Статистика · 📋 Сложные — список твоих ошибок\n"
@@ -215,10 +215,13 @@ ALL_CARD_KEYS = frozenset(card_key(it) for it in _mixed_pool())
 
 
 def _build_review_deck(user_id: int) -> list:
-    """Cards whose spaced-repetition review is due today, across all types."""
+    """Cards due for spaced-repetition review today, across all types, ordered
+    hardest-first (most past errors), shuffled within each error tier."""
     due  = set(db.get_due_ids(user_id))
+    weak = db.get_weak_ids(user_id)                 # {card_key: unknown_count}
     deck = [item for item in _mixed_pool() if card_key(item) in due]
-    random.shuffle(deck)
+    random.shuffle(deck)                            # randomize within equal tiers
+    deck.sort(key=lambda it: weak.get(card_key(it), 0), reverse=True)
     return deck
 
 
