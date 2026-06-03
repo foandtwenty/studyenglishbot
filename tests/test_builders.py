@@ -110,7 +110,7 @@ def test_weak_menu_groups_collision_separately(db):
     assert "Неправильные глаголы" in text
     assert "Глаголы + to / -ing" in text
     assert "Прилагательные + предлог" in text
-    assert "Главное меню" in str(kb)
+    assert "menu_profile" in str(kb)        # back goes to the profile sub-screen
 
 
 def test_weak_menu_empty_state(db):

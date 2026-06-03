@@ -349,6 +349,15 @@ def build_type_selector(welcome: bool = False,
         [InlineKeyboardButton("➕ Глаголы + to / -ing",      callback_data="pick:vp")],
         [InlineKeyboardButton("🔗 Прилагательные + предлог", callback_data="pick:adjprep")],
         [InlineKeyboardButton("🎲 Всё вперемешку",           callback_data="pick:mixed")],
+        [InlineKeyboardButton("⚙️ Профиль и прогресс",       callback_data="menu_profile")],
+    ]
+    return text, InlineKeyboardMarkup(rows)
+
+
+def build_menu_profile(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    header = _progress_header(user_id)
+    text   = (f"{header}\n\n" if header else "") + "⚙️ *Профиль и прогресс*"
+    kb = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 Статистика", callback_data="menu_stats"),
             InlineKeyboardButton("📋 Сложные",    callback_data="menu_weak"),
@@ -357,8 +366,9 @@ def build_type_selector(welcome: bool = False,
             InlineKeyboardButton("📈 История",    callback_data="menu_history"),
             InlineKeyboardButton("❓ Помощь",     callback_data="menu_help"),
         ],
-    ]
-    return text, InlineKeyboardMarkup(rows)
+        [InlineKeyboardButton("← Главное меню", callback_data="back_to_types")],
+    ])
+    return text, kb
 
 
 def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -407,12 +417,12 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
             f"Активной тренировки нет. Выбери тему в меню и начни! 🚀\n"
         )
 
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Главное меню", callback_data="back_to_types")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="menu_profile")]])
     return current_block + lifetime_block, kb
 
 
-def build_menu_weak(user_id: int, back_callback: str = "back_to_types",
-                    back_label: str = "← Главное меню") -> tuple[str, InlineKeyboardMarkup]:
+def build_menu_weak(user_id: int, back_callback: str = "menu_profile",
+                    back_label: str = "← Назад") -> tuple[str, InlineKeyboardMarkup]:
     try:
         rows = db.get_weak_verbs(user_id)
         groups: dict[str, list] = {"verbs": [], "vp": [], "adjprep": [], "prep": []}
@@ -440,8 +450,8 @@ def build_menu_weak(user_id: int, back_callback: str = "back_to_types",
     return f"📋 *Сложные карточки:*\n{body}", kb
 
 
-def build_menu_history(user_id: int, back_callback: str = "back_to_types",
-                       back_label: str = "← Главное меню") -> tuple[str, InlineKeyboardMarkup]:
+def build_menu_history(user_id: int, back_callback: str = "menu_profile",
+                       back_label: str = "← Назад") -> tuple[str, InlineKeyboardMarkup]:
     try:
         rows = db.get_history(user_id)
         if rows:
@@ -466,7 +476,7 @@ def build_menu_help(user_id: int | None = None) -> tuple[str, InlineKeyboardMark
     rows: list[list[InlineKeyboardButton]] = []
     if user_id is not None:
         rows.append([InlineKeyboardButton("🔔 Напоминания", callback_data="menu_reminders")])
-    rows.append([InlineKeyboardButton("← Главное меню", callback_data="back_to_types")])
+    rows.append([InlineKeyboardButton("← Назад", callback_data="menu_profile")])
     return HELP_TEXT, InlineKeyboardMarkup(rows)
 
 
@@ -1084,6 +1094,11 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     # ── Menu screens ──
+    if data == "menu_profile":
+        text, kb = build_menu_profile(user_id)
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
     if data == "menu_stats":
         session = context.user_data.get("session")
         text, kb = build_menu_stats(session, user_id)

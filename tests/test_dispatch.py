@@ -102,3 +102,22 @@ def test_type_answer_reaches_input_prompt(harness):
 def test_stale_session_shows_notice(harness):
     harness.press("knew")                            # no active session
     assert "не найдена" in harness.ctx.bot.edits[-1].text
+
+
+def test_main_menu_has_profile_not_service_buttons(harness):
+    """Service buttons are collapsed under one Профиль entry on the main menu."""
+    text, kb = bot.build_type_selector(user_id=1)
+    flat = str(kb)
+    assert "menu_profile" in flat
+    assert "menu_stats" not in flat and "menu_history" not in flat
+
+
+def test_profile_then_stats_then_back_navigation(harness):
+    harness.press("menu_profile")
+    assert "Профиль" in harness.ctx.bot.edits[-1].text
+    flat = str(harness.ctx.bot.edits[-1].kb)
+    assert "menu_stats" in flat and "menu_weak" in flat and "back_to_types" in flat
+    harness.press("menu_stats")
+    assert "Статистика" in harness.ctx.bot.edits[-1].text
+    # back goes to profile, not main
+    assert "menu_profile" in str(harness.ctx.bot.edits[-1].kb)
