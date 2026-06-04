@@ -406,11 +406,11 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
             info.append(f"⏸ *На паузе:* {label} — осталось {total - done}")
         if daily:
             if reviews and new:
-                parts = f"{reviews} на повтор + {new} новых"
+                parts = f"{reviews} на повтор + {new} к изучению"
             elif reviews:
                 parts = f"{reviews} {_card_plural_nom(reviews)} на повтор"
             else:
-                parts = f"{new} новых {_card_plural_nom(new)}"
+                parts = f"{new} {_card_plural_nom(new)} к изучению"
             info.append(f"🔔 *Тренировка дня:* {parts}")
         header = _progress_header(user_id)
         blocks = []
@@ -708,7 +708,6 @@ def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("✅ Помню",    callback_data="knew"),
             InlineKeyboardButton("❌ Не помню", callback_data="didnt_know"),
         ],
-        [InlineKeyboardButton("⏸ Пауза", callback_data="stop_session")],
     ])
     return text, kb
 
@@ -772,7 +771,6 @@ def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
 def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, InlineKeyboardMarkup]:
     kb_next = InlineKeyboardMarkup([
         [InlineKeyboardButton("➡️ Дальше", callback_data="next")],
-        [InlineKeyboardButton("⏸ Пауза",   callback_data="stop_session")],
     ])
     head = "✅ *Верно!*" if correct else "❌ *Неверно.*"
 
@@ -810,7 +808,6 @@ def build_type_result(item: dict, user_input: str | None, correct: bool,
     note_line = f"\n\n📖 _{item['note']}_" if item.get("note") else ""
     kb_next   = InlineKeyboardMarkup([
         [InlineKeyboardButton("➡️ Дальше", callback_data="next")],
-        [InlineKeyboardButton("⏸ Пауза",   callback_data="stop_session")],
     ])
     if correct:
         head = ("🟡 *Верно, но с подсказкой* — повторим, чтобы запомнить:"
@@ -838,12 +835,11 @@ def build_end_review_intro(count: int) -> tuple[str, InlineKeyboardMarkup]:
     text = (
         f"🏁 *Основная колода пройдена!*\n\n"
         f"Карточек с ошибками: *{count}*.\n"
-        f"Закрепим их повторением — или завершим тренировку.\n\n"
-        f"_Результат сохранится в любом случае._"
+        f"Закрепим их повторением — или завершим тренировку."
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Повторить ошибки",      callback_data="start_review")],
-        [InlineKeyboardButton("🏁 Завершить и сохранить", callback_data="finish_session")],
+        [InlineKeyboardButton("🔄 Повторить ошибки", callback_data="start_review")],
+        [InlineKeyboardButton("🏁 Завершить",         callback_data="finish_session")],
     ])
     return text, kb
 
