@@ -168,7 +168,8 @@ def _norm_forms(s: str) -> list[str]:
     """Accepted spellings of a verb form, e.g. 'was/were' -> ['was','were'].
     Strips leading/trailing punctuation so 'went, gone.' matches correctly."""
     tokens = s.lower().replace("/", " ").split()
-    return [re.sub(r"^[^\w]+|[^\w]+$", "", t) for t in tokens if re.sub(r"^[^\w]+|[^\w]+$", "", t)]
+    stripped = (re.sub(r"^[^\w]+|[^\w]+$", "", t) for t in tokens)
+    return [t for t in stripped if t]
 
 
 def _sanitize_user_text(s: str) -> str:
