@@ -354,9 +354,10 @@ def reset_all_progress() -> dict:
 
 
 def get_admin_stats() -> dict:
-    today     = date.today().isoformat()
-    week_ago  = (date.today() - timedelta(days=7)).isoformat()
-    month_ago = (date.today() - timedelta(days=30)).isoformat()
+    today_d   = _now().date()
+    today     = today_d.isoformat()
+    week_ago  = (today_d - timedelta(days=7)).isoformat()
+    month_ago = (today_d - timedelta(days=30)).isoformat()
     with _conn() as c:
         total_users    = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         active_7d      = c.execute(

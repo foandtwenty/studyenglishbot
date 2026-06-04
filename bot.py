@@ -165,8 +165,10 @@ def _vp_display(item: dict) -> str:
 
 
 def _norm_forms(s: str) -> list[str]:
-    """Accepted spellings of a verb form, e.g. 'was/were' -> ['was','were']."""
-    return s.lower().replace("/", " ").split()
+    """Accepted spellings of a verb form, e.g. 'was/were' -> ['was','were'].
+    Strips leading/trailing punctuation so 'went, gone.' matches correctly."""
+    tokens = s.lower().replace("/", " ").split()
+    return [re.sub(r"^[^\w]+|[^\w]+$", "", t) for t in tokens if re.sub(r"^[^\w]+|[^\w]+$", "", t)]
 
 
 def _sanitize_user_text(s: str) -> str:
@@ -947,6 +949,10 @@ def _session_outcomes(session: dict) -> tuple[dict, int, int]:
 
 
 def advance(session: dict) -> None:
+    # Clear the hint flag for the card being left so it starts clean on its next appearance.
+    cur = session["queue"][session["pos"]] if session["pos"] < len(session["queue"]) else None
+    if cur:
+        session.get("hint_used", set()).discard(card_key(cur))
     session["pos"] += 1
     new_buf = []
     for item, countdown in session["review_buffer"]:
@@ -978,9 +984,6 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
         await show_results(chat_id, session, bot)
         return
 
-    # Each new display is a clean attempt — clear any hint flag from a prior pass.
-    session.get("hint_used", set()).discard(card_key(item))
-
     ex_type = item_type(item)          # per-card, so mixed/review decks work
     tm = type_mode and ex_type == "verbs"   # input applies to any verb card
     if ex_type == "verbs":
@@ -1004,7 +1007,8 @@ async def show_results(chat_id: int, session: dict, bot) -> None:
         deck = session["end_review"].copy()
         random.shuffle(deck)
         session.update({
-            "phase": PHASE_END_REVIEW, "queue": deck, "pos": 0, "review_buffer": [],
+            "phase": PHASE_END_REVIEW, "queue": deck, "pos": 0,
+            "review_buffer": [], "hint_used": set(),
         })
         text, kb = build_end_review_intro(len(deck))
         await safe_edit(bot, chat_id, session["message_id"], text, kb)
@@ -1435,6 +1439,17 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
+    # Ignore callbacks from old card messages (user scrolled up and tapped a stale button).
+    # Menu-navigation callbacks that target query.message.message_id directly are exempt.
+    _session_mutating = frozenset({
+        "ans", "knew", "didnt_know", "reveal", "next",
+        "hint", "show", "finish_session", "start_review",
+    })
+    if (action in _session_mutating or data in _session_mutating) and \
+            query.message.message_id != session.get("message_id"):
+        await query.answer()
+        return
+
     if data == "start_review":
         await show_card(chat_id, session, context.bot, type_mode=type_mode)
         return
@@ -1471,11 +1486,11 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if item_type(item) != "verbs":
             return
         tm   = type_mode             # item is a verb here; input applies anywhere
+        # A peeked hint means the user couldn't recall unaided — mark ever_wrong
+        # regardless of mode so self-reported ✅ after a hint still counts as a slip.
+        session.setdefault("ever_wrong", set()).add(card_key(item))
         if tm:
-            # Using a hint while typing means you didn't recall it — it counts
-            # as «ещё учу» (won't be marked known even if you then type it right).
             session.setdefault("hint_used", set()).add(card_key(item))
-            session.setdefault("ever_wrong", set()).add(card_key(item))
         prog = session.get("_last_progress") or progress_line(session, item)
         v2   = item["v2"].split("/")[0]
         v3   = item["v3"].split("/")[0]
@@ -1549,7 +1564,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # still be the right form — «sat sitten» is wrong, not correct.
         correct = bool(parts) and all(p in expected_v2 for p in parts)
     else:
-        correct = len(parts) >= 2 and parts[0] in expected_v2 and parts[-1] in expected_v3
+        # All tokens before the last must be valid V2 forms; the last must be V3.
+        # This accepts "went gone" (normal) and "was/were been" (multi-variant V2)
+        # while rejecting "went garbage gone" (extra unrecognised tokens).
+        correct = (
+            len(parts) >= 2
+            and parts[-1] in expected_v3
+            and all(p in expected_v2 for p in parts[:-1])
+        )
 
     hinted = card_key(item) in session.get("hint_used", set())
     text, kb = build_type_result(item, raw, correct, hinted=hinted)
@@ -1594,7 +1616,8 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(
                 uid,
                 f"🔔 *Тренировка дня готова!*\n\n"
-                f"*{cnt}* {_card_plural_nom(cnt)}: {reviews} на повтор + {new} новых.\n"
+                f"*{cnt}* {_card_plural_nom(cnt)}: "
+                f"{f'{reviews} на повтор + {new} к изучению' if reviews and new else f'{reviews} на повтор' if reviews else f'{new} к изучению'}.\n"
                 f"Несколько минут — и слова закрепятся надолго 💪",
                 parse_mode="Markdown", reply_markup=kb,
             )
