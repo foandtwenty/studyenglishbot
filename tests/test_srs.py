@@ -188,3 +188,32 @@ def test_review_deck_capped_for_burnout(db, monkeypatch):
                         lambda: _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=5))
     assert db.get_due_count(1) == 50
     assert len(bot._build_review_deck(1)) == bot.REVIEW_CAP          # capped
+
+
+def test_new_deck_is_unseen_and_easiest_first(db):
+    db.ensure_user(1)
+    # mark one Базовый verb as seen
+    db.save_session(1, 1, 0, 1, {"verbs::go": True}, None)
+    deck = bot._build_new_deck(1, limit=10)
+    keys = {bot.card_key(i) for i in deck}
+    assert "verbs::go" not in keys                       # seen card excluded
+    assert all(bot.item_level(i) == 1 for i in deck)     # easiest level first
+
+
+def test_daily_deck_combines_reviews_and_new(db, monkeypatch):
+    import datetime as _dt
+    db.ensure_user(1)
+    db.save_session(1, 0, 5, 5,
+                    {bot.card_key(i): False for i in bot._mixed_pool()[:5]}, None)
+    monkeypatch.setattr(db, "_now",
+                        lambda: _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=5))
+    deck = bot._build_daily_deck(1)
+    assert len(deck) == 5 + bot.NEW_PER_DAY              # 5 due + new budget
+
+
+def test_fresh_user_daily_is_new_cards(db):
+    db.ensure_user(1)
+    reviews, new = bot._daily_counts(1)
+    assert reviews == 0 and new == bot.NEW_PER_DAY
+    _, kb = bot.build_type_selector(user_id=1)
+    assert "start_due" in str(kb)                        # daily button shown to new user

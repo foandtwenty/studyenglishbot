@@ -209,6 +209,14 @@ def get_lifetime_stats(user_id: int) -> dict:
     }
 
 
+def get_seen_keys(user_id: int) -> set:
+    """Every namespaced key the user has ever answered (has a verb_stats row).
+    Cards NOT in this set are brand-new and eligible for the daily new budget."""
+    with _conn() as c:
+        rows = c.execute("SELECT verb_v1 FROM verb_stats WHERE user_id=?", (user_id,)).fetchall()
+    return {r["verb_v1"] for r in rows}
+
+
 def get_known_keys(user_id: int) -> set:
     """Namespaced keys the user reliably knows (known_count > unknown_count),
     for per-level «выучено» progress."""

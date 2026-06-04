@@ -53,7 +53,7 @@ TYPE_LABEL = {
     "vp":      "Глаголы + to / -ing",
     "adjprep": "Прилагательные + предлог",
     "mixed":   "Всё вперемешку",
-    "review":  "Повторение",
+    "review":  "Тренировка дня",
 }
 
 HELP_TEXT = (
@@ -199,8 +199,10 @@ ALL_CARD_KEYS = frozenset(card_key(it) for it in _mixed_pool())
 
 # Daily review is capped so it never balloons into a burnout grind. The hardest
 # cards come first, so a cap always keeps the most important ones; the rest stay
-# due and surface in the next session.
-REVIEW_CAP = 30
+# due and surface in the next session. New cards are introduced a few per day so
+# the daily training also grows vocabulary without overwhelming.
+REVIEW_CAP  = 30
+NEW_PER_DAY = 7
 
 
 def _build_review_deck(user_id: int) -> list:
@@ -212,6 +214,34 @@ def _build_review_deck(user_id: int) -> list:
     random.shuffle(deck)                            # randomize within equal tiers
     deck.sort(key=lambda it: weak.get(card_key(it), 0), reverse=True)
     return deck[:REVIEW_CAP]
+
+
+def _build_new_deck(user_id: int, limit: int = NEW_PER_DAY) -> list:
+    """Brand-new (never-answered) cards for the daily budget — easiest level
+    first, types mixed within a level."""
+    seen = db.get_seen_keys(user_id)
+    fresh = [it for it in _mixed_pool() if card_key(it) not in seen]
+    random.shuffle(fresh)                           # mix types within a level
+    fresh.sort(key=item_level)                      # Базовый first
+    return fresh[:limit]
+
+
+def _build_daily_deck(user_id: int) -> list:
+    """«Тренировка дня» = capped due reviews (hardest first) + a few new cards."""
+    return _build_review_deck(user_id) + _build_new_deck(user_id)
+
+
+def _daily_counts(user_id: int | None) -> tuple[int, int]:
+    """(reviews_due_capped, new_available_capped) for the menu badge/text."""
+    if not user_id:
+        return 0, 0
+    try:
+        reviews = min(_due_count(user_id), REVIEW_CAP)
+        new     = min(len(ALL_CARD_KEYS - db.get_seen_keys(user_id)), NEW_PER_DAY)
+        return reviews, new
+    except Exception:
+        logger.exception("daily counts failed for user %s", user_id)
+        return 0, 0
 
 
 def _due_count(user_id: int | None) -> int:
@@ -360,7 +390,8 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
             "и снова в конце — так слова запоминаются лучше.\n\n"
             "*Выбери тему и начнём!*"
         )
-    due = min(_due_count(user_id), REVIEW_CAP)        # daily review is capped
+    reviews, new = _daily_counts(user_id)
+    daily = reviews + new
 
     if not welcome:
         # Context lives in the text so the buttons below read clearly.
@@ -368,9 +399,14 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
         if resume:
             label, done, total = resume
             info.append(f"⏸ *На паузе:* {label} — осталось {total - done}")
-        if due:
-            info.append(f"🔔 *Тренировка дня:* {due} {_card_plural_nom(due)} "
-                        f"— со всех тем, сложные первыми")
+        if daily:
+            if reviews and new:
+                parts = f"{reviews} на повтор + {new} новых"
+            elif reviews:
+                parts = f"{reviews} {_card_plural_nom(reviews)} на повтор"
+            else:
+                parts = f"{new} новых {_card_plural_nom(new)}"
+            info.append(f"🔔 *Тренировка дня:* {parts}")
         header = _progress_header(user_id)
         blocks = []
         if info:   blocks.append("\n".join(info))
@@ -380,8 +416,8 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
     rows: list[list[InlineKeyboardButton]] = []
     if resume:
         rows.append([InlineKeyboardButton("▶️ Продолжить", callback_data="resume_session")])
-    if due:
-        rows.append([InlineKeyboardButton(f"🔔 Повторить ({due})", callback_data="start_due")])
+    if daily:
+        rows.append([InlineKeyboardButton(f"🔔 Тренировка дня ({daily})", callback_data="start_due")])
     rows.append([
         InlineKeyboardButton("📚 Выбрать тему", callback_data="menu_topics"),
         InlineKeyboardButton("⚙️ Профиль",      callback_data="menu_profile"),
@@ -1306,9 +1342,9 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data == "start_due":
-        deck = _build_review_deck(user_id)
+        deck = _build_daily_deck(user_id)
         if not deck:
-            await query.answer("Сейчас нечего повторять — загляни позже 👍", show_alert=True)
+            await query.answer("На сегодня всё пройдено — загляни позже 👍", show_alert=True)
             return
         session = new_session("review", deck=deck, user_id=user_id)
         context.user_data["last_type"] = "review"
@@ -1344,9 +1380,9 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 return
             session = new_session(ex_type, user_id=user_id, deck=weak_deck)
         elif last_size == "review":
-            deck = _build_review_deck(user_id)
+            deck = _build_daily_deck(user_id)
             if not deck:
-                await query.answer("Сейчас нечего повторять — загляни позже 👍", show_alert=True)
+                await query.answer("На сегодня всё пройдено — загляни позже 👍", show_alert=True)
                 return
             session = new_session("review", user_id=user_id, deck=deck)
         elif last_size.startswith("lvl:"):
@@ -1543,17 +1579,18 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     for uid in targets:
         try:
-            cnt = min(_due_count(uid), REVIEW_CAP)        # bite-sized daily norm
+            reviews, new = _daily_counts(uid)
+            cnt = reviews + new
             if not cnt:
                 continue
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"🔔 Повторить ({cnt})", callback_data="start_due")],
+                [InlineKeyboardButton(f"🔔 Тренировка дня ({cnt})", callback_data="start_due")],
                 [InlineKeyboardButton("🔕 Отключить", callback_data="reminders_off")],
             ])
             await context.bot.send_message(
                 uid,
                 f"🔔 *Тренировка дня готова!*\n\n"
-                f"К повторению: *{cnt}* {_card_plural_nom(cnt)} (самые важные).\n"
+                f"*{cnt}* {_card_plural_nom(cnt)}: {reviews} на повтор + {new} новых.\n"
                 f"Несколько минут — и слова закрепятся надолго 💪",
                 parse_mode="Markdown", reply_markup=kb,
             )
