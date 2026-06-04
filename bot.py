@@ -228,7 +228,9 @@ def _build_new_deck(user_id: int, limit: int = NEW_PER_DAY) -> list:
 
 def _build_daily_deck(user_id: int) -> list:
     """«Тренировка дня» = capped due reviews (hardest first) + a few new cards."""
-    return _build_review_deck(user_id) + _build_new_deck(user_id)
+    new_today  = db.get_new_today_count(user_id)
+    new_budget = max(0, NEW_PER_DAY - new_today)
+    return _build_review_deck(user_id) + _build_new_deck(user_id, limit=new_budget)
 
 
 def _daily_counts(user_id: int | None) -> tuple[int, int]:
@@ -236,8 +238,11 @@ def _daily_counts(user_id: int | None) -> tuple[int, int]:
     if not user_id:
         return 0, 0
     try:
-        reviews = min(_due_count(user_id), REVIEW_CAP)
-        new     = min(len(ALL_CARD_KEYS - db.get_seen_keys(user_id)), NEW_PER_DAY)
+        reviews      = min(_due_count(user_id), REVIEW_CAP)
+        new_today    = db.get_new_today_count(user_id)
+        new_budget   = max(0, NEW_PER_DAY - new_today)
+        unseen       = len(ALL_CARD_KEYS - db.get_seen_keys(user_id))
+        new          = min(unseen, new_budget)
         return reviews, new
     except Exception:
         logger.exception("daily counts failed for user %s", user_id)
@@ -930,6 +935,9 @@ def mark_unknown(session: dict, item: dict) -> None:
         return
     if not any(card_key(v) == key for v, _ in session["review_buffer"]):
         session["review_buffer"].append((item, random.randint(2, 3)))
+        # Give a clean slate on the retry: hint from the first pass shouldn't
+        # penalise a correct unaided answer in the review round.
+        session.get("hint_used", set()).discard(key)
     if not any(card_key(v) == key for v in session["end_review"]):
         session["end_review"].append(item)
 

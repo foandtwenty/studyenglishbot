@@ -60,6 +60,7 @@ def init_db() -> None:
                 unknown_count INTEGER DEFAULT 0,
                 box           INTEGER DEFAULT 0,
                 next_due      TEXT,
+                first_seen    TEXT,
                 PRIMARY KEY (user_id, verb_v1)
             );
             CREATE INDEX IF NOT EXISTS idx_verb_stats_due
@@ -80,6 +81,8 @@ def init_db() -> None:
             c.execute("ALTER TABLE users ADD COLUMN reminder_hour INTEGER DEFAULT 18")
         if "tz_offset" not in ucols:
             c.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER DEFAULT 0")
+        if "first_seen" not in vcols:
+            c.execute("ALTER TABLE verb_stats ADD COLUMN first_seen TEXT")
 
 
 def ensure_user(user_id: int) -> bool:
@@ -123,14 +126,14 @@ def save_session(user_id: int, known: int, unknown: int, total: int,
             due = (today_d + timedelta(days=LEITNER_DAYS[box])).isoformat()
             kc, uc = (1, 0) if is_known else (0, 1)
             c.execute("""
-                INSERT INTO verb_stats (user_id, verb_v1, known_count, unknown_count, box, next_due)
-                VALUES (?,?,?,?,?,?)
+                INSERT INTO verb_stats (user_id, verb_v1, known_count, unknown_count, box, next_due, first_seen)
+                VALUES (?,?,?,?,?,?,?)
                 ON CONFLICT(user_id, verb_v1) DO UPDATE SET
                     known_count   = known_count   + ?,
                     unknown_count = unknown_count + ?,
                     box           = ?,
                     next_due      = ?
-            """, (user_id, key, kc, uc, box, due, kc, uc, box, due))
+            """, (user_id, key, kc, uc, box, due, today, kc, uc, box, due))
 
         row = c.execute("SELECT streak, last_study FROM users WHERE user_id=?", (user_id,)).fetchone()
         if row is None:
@@ -207,6 +210,16 @@ def get_lifetime_stats(user_id: int) -> dict:
         "sessions":     total_sessions,
         "total_cards":  total_cards,
     }
+
+
+def get_new_today_count(user_id: int) -> int:
+    """Cards that were first introduced today (their first_seen == today)."""
+    with _conn() as c:
+        today = _user_today(c, user_id).isoformat()
+        return c.execute(
+            "SELECT COUNT(*) FROM verb_stats WHERE user_id=? AND first_seen=?",
+            (user_id, today),
+        ).fetchone()[0]
 
 
 def get_seen_keys(user_id: int) -> set:
