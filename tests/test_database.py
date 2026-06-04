@@ -96,3 +96,18 @@ def test_due_respects_user_timezone(db, monkeypatch):
     base = _dt.datetime.now(_dt.timezone.utc).replace(hour=20, minute=0)
     monkeypatch.setattr(db, "_now", lambda: base + _dt.timedelta(days=1))
     assert db.get_due_count(1) >= 1
+
+
+def test_reset_all_progress_keeps_users_and_settings(db):
+    db.ensure_user(1)
+    db.set_reminder_hour(1, 20)
+    db.set_tz_offset(1, 3)
+    db.save_session(1, 1, 1, 2, {"verbs::go": True, "verbs::be": False}, None)
+    res = db.reset_all_progress()
+    assert res["sessions"] == 1 and res["verb_stats"] == 2
+    assert db.get_history(1) == []
+    assert db.get_lifetime_stats(1)["mastered"] == 0
+    assert db.get_streak(1) == 0
+    # user + reminder settings survive
+    assert db.ensure_user(1) is False
+    assert db.get_reminder_settings(1) == {"enabled": True, "hour": 20, "tz": 3}

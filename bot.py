@@ -1065,6 +1065,32 @@ def _admin_id() -> int | None:
         return None
 
 
+async def cmd_resetprogress(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin-only, irreversible: wipe progress/history/streaks for ALL users.
+    Requires explicit confirmation: /resetprogress CONFIRM"""
+    admin_id = _admin_id()
+    if admin_id is None or update.effective_user.id != admin_id:
+        return
+    arg = (context.args[0].upper() if context.args else "")
+    if arg != "CONFIRM":
+        await update.message.reply_text(
+            "⚠️ *Сброс прогресса у ВСЕХ пользователей* (история, статистика "
+            "карточек, серии) — это *необратимо*.\nПользователи и напоминания "
+            "сохранятся.\n\nПодтверди: `/resetprogress CONFIRM`",
+            parse_mode="Markdown",
+        )
+        return
+    res = db.reset_all_progress()
+    await update.message.reply_text(
+        f"✅ Прогресс сброшен.\n"
+        f"Сессий удалено: *{res['sessions']}*\n"
+        f"Статистики карточек: *{res['verb_stats']}*\n"
+        f"Серии обнулены у *{res['users']}* пользователей.\n"
+        f"_Аккаунты и настройки напоминаний сохранены._",
+        parse_mode="Markdown",
+    )
+
+
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     admin_id = _admin_id()
     if admin_id is None or update.effective_user.id != admin_id:
@@ -1548,6 +1574,7 @@ def main() -> None:
     app.add_handler(CommandHandler("mode",    cmd_mode))
     app.add_handler(CommandHandler("help",    cmd_help))
     app.add_handler(CommandHandler("admin",   cmd_admin))
+    app.add_handler(CommandHandler("resetprogress", cmd_resetprogress))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_error_handler(on_error)

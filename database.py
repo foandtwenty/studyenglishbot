@@ -318,6 +318,20 @@ def get_history(user_id: int, limit: int = 10) -> list:
         """, (user_id, limit)).fetchall()
 
 
+def reset_all_progress() -> dict:
+    """Wipe learning progress for ALL users — session history, per-card stats
+    (boxes/due/errors), and streaks. Keeps user rows and reminder settings.
+    Irreversible. Returns how many rows were cleared."""
+    with _conn() as c:
+        sessions = c.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        stats    = c.execute("SELECT COUNT(*) FROM verb_stats").fetchone()[0]
+        users    = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        c.execute("DELETE FROM sessions")
+        c.execute("DELETE FROM verb_stats")
+        c.execute("UPDATE users SET streak = 0, last_study = NULL")
+    return {"sessions": sessions, "verb_stats": stats, "users": users}
+
+
 def get_admin_stats() -> dict:
     today     = date.today().isoformat()
     week_ago  = (date.today() - timedelta(days=7)).isoformat()
