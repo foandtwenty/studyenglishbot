@@ -313,11 +313,12 @@ def current_item(session: dict) -> dict | None:
 
 
 def _resume_info(context) -> tuple[int, int] | None:
-    """(done, total) for an unfinished session that can be resumed, else None
-    (a finished session has no current card)."""
+    """(theme_label, done, total) for an unfinished session that can be resumed,
+    else None (a finished session has no current card)."""
     s = context.user_data.get("session")
     if s and current_item(s) is not None:
-        return len(s["first_shown"]), s["original_total"]
+        label = TYPE_LABEL.get(s.get("exercise_type", ""), "")
+        return label, len(s["first_shown"]), s["original_total"]
     return None
 
 
@@ -354,28 +355,42 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
             "и снова в конце — так слова запоминаются лучше.\n\n"
             "*Выбери тему и начнём!*"
         )
-    else:
+    due = _due_count(user_id)
+
+    if not welcome:
+        # Context lives in the text so the buttons below read clearly.
+        info = []
+        if resume:
+            label, done, total = resume
+            info.append(f"⏸ *На паузе:* {label} · {done}/{total}")
+        if due:
+            info.append(f"🔄 *К повторению:* {due} — из всех тем")
         header = _progress_header(user_id)
-        text = (f"{header}\n\n" if header else "") + "📚 *Что хочешь потренировать?*"
+        blocks = []
+        if info:   blocks.append("\n".join(info))
+        if header: blocks.append(header)
+        text = "\n\n".join(blocks) if blocks else "📚 *Что хочешь потренировать?*"
 
     rows: list[list[InlineKeyboardButton]] = []
     if resume:
-        a, b = resume
-        rows.append([InlineKeyboardButton(
-            f"▶️ Продолжить ({a}/{b})", callback_data="resume_session")])
-    due = _due_count(user_id)
+        rows.append([InlineKeyboardButton("▶️ Продолжить", callback_data="resume_session")])
     if due:
-        rows.append([InlineKeyboardButton(
-            f"🔔 Повторить ({due})", callback_data="start_due")])
-    rows += [
+        rows.append([InlineKeyboardButton(f"🔔 Повторить ({due})", callback_data="start_due")])
+    rows.append([InlineKeyboardButton("📚 Выбрать тему", callback_data="menu_topics")])
+    rows.append([InlineKeyboardButton("⚙️ Профиль",     callback_data="menu_profile")])
+    return text, InlineKeyboardMarkup(rows)
+
+
+def build_menu_topics() -> tuple[str, InlineKeyboardMarkup]:
+    kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔤 Неправильные глаголы",     callback_data="pick:verbs")],
         [InlineKeyboardButton("📍 Предлоги in / on / at",    callback_data="pick:prep")],
         [InlineKeyboardButton("➕ Глаголы + to / -ing",      callback_data="pick:vp")],
         [InlineKeyboardButton("🔗 Прилагательные + предлог", callback_data="pick:adjprep")],
         [InlineKeyboardButton("🎲 Всё вперемешку",           callback_data="pick:mixed")],
-        [InlineKeyboardButton("⚙️ Профиль и прогресс",       callback_data="menu_profile")],
-    ]
-    return text, InlineKeyboardMarkup(rows)
+        [InlineKeyboardButton("← Назад",                     callback_data="back_to_types")],
+    ])
+    return "📚 *Выбери тему*", kb
 
 
 def build_menu_profile(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -552,7 +567,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
             InlineKeyboardButton("10", callback_data="size:10"),
             InlineKeyboardButton("20", callback_data="size:20"),
             InlineKeyboardButton("30", callback_data="size:30"),
-        ], [InlineKeyboardButton("← Назад", callback_data="back_to_types")]]
+        ], [InlineKeyboardButton("← Назад", callback_data="menu_topics")]]
         return text, InlineKeyboardMarkup(rows)
 
     # Single types pick by difficulty level, with «освоено / всего» progress.
@@ -590,7 +605,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
     if exercise_type == "verbs":
         label = "✏️ Выключить ввод V2/V3" if type_mode else "✏️ Включить ввод V2/V3"
         rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
-    rows.append([InlineKeyboardButton("← Назад", callback_data="back_to_types")])
+    rows.append([InlineKeyboardButton("← Назад", callback_data="menu_topics")])
     return text, InlineKeyboardMarkup(rows)
 
 
@@ -1173,6 +1188,11 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     # ── Menu screens ──
+    if data == "menu_topics":
+        text, kb = build_menu_topics()
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
     if data == "menu_profile":
         text, kb = build_menu_profile(user_id)
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)

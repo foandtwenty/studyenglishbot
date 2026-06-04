@@ -110,8 +110,9 @@ def test_main_menu_shows_due_and_mixed(db, fake_date):
     fake_date(_dt.date(2026, 1, 2))
     _, kb = bot.build_type_selector(user_id=1)
     flat = str(kb)
-    assert "start_due" in flat
-    assert "pick:mixed" in flat
+    assert "start_due" in flat                 # «Повторить» surfaces when due
+    assert "menu_topics" in flat               # themes live under «Выбрать тему»
+    assert "pick:mixed" in str(bot.build_menu_topics()[1])
 
 
 def test_due_count_matches_deck_ignoring_orphans(db, monkeypatch):

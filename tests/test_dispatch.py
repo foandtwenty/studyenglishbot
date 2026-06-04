@@ -246,3 +246,23 @@ def test_type_mode_applies_to_verb_card_in_mixed(harness):
         ca = cur.get("answer") or cur.get("pattern") or cur.get("preposition")
         harness.press(f"ans:{ca}"); harness.press("next")
     # if no verb appeared in 30 mixed cards that's fine; nothing to assert
+
+
+def test_topics_submenu_navigation(harness):
+    harness.press("menu_topics")
+    flat = str(harness.ctx.bot.edits[-1].kb)
+    assert "pick:verbs" in flat and "pick:mixed" in flat and "back_to_types" in flat
+    harness.press("pick:verbs")                       # → level selector
+    assert "lvl:1" in str(harness.ctx.bot.edits[-1].kb)
+    assert "menu_topics" in str(harness.ctx.bot.edits[-1].kb)   # back goes to topics
+
+
+def test_main_menu_max_four_primary_buttons(harness):
+    # with a paused session + due cards, still only 4 rows: продолжить / повторить
+    # / выбрать тему / профиль
+    harness.press("menu_topics"); harness.press("pick:verbs"); harness.press("lvl:1")
+    harness.press("stop_session")                     # pause → main menu
+    kb = harness.ctx.bot.edits[-1].kb
+    assert len(kb.inline_keyboard) <= 4
+    flat = str(kb)
+    assert "resume_session" in flat and "menu_topics" in flat and "menu_profile" in flat

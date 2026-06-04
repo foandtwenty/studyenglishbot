@@ -135,8 +135,9 @@ def test_progress_header_shows_after_a_session(db):
 def test_main_menu_shows_progress_for_returning_user(db):
     db.ensure_user(1)
     db.save_session(1, 1, 0, 1, {"go": True}, "verbs")
-    text, _ = bot.build_type_selector(user_id=1)
-    assert "Освоено" in text and "Что хочешь потренировать" in text
+    text, kb = bot.build_type_selector(user_id=1)
+    assert "Освоено" in text                       # progress header shown
+    assert "menu_topics" in str(kb)                # themes are one tap away
 
 
 def test_main_menu_clean_for_new_user(db):
