@@ -177,3 +177,14 @@ def test_review_deck_orders_hardest_first(db):
     ids = [bot.item_id(i) for i in deck]
     assert ids.index("make") < ids.index("go") < ids.index("do")   # most errors first
     database._now = lambda: _dt.datetime.now(_dt.timezone.utc)
+
+
+def test_review_deck_capped_for_burnout(db, monkeypatch):
+    import datetime as _dt
+    db.ensure_user(1)
+    keys = [bot.card_key(i) for i in bot._mixed_pool()[:50]]
+    db.save_session(1, 0, 50, 50, {k: False for k in keys}, None)   # 50 due
+    monkeypatch.setattr(db, "_now",
+                        lambda: _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=5))
+    assert db.get_due_count(1) == 50
+    assert len(bot._build_review_deck(1)) == bot.REVIEW_CAP          # capped

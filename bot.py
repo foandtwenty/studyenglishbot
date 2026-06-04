@@ -197,16 +197,21 @@ def _mixed_pool() -> list:
 
 ALL_CARD_KEYS = frozenset(card_key(it) for it in _mixed_pool())
 
+# Daily review is capped so it never balloons into a burnout grind. The hardest
+# cards come first, so a cap always keeps the most important ones; the rest stay
+# due and surface in the next session.
+REVIEW_CAP = 30
+
 
 def _build_review_deck(user_id: int) -> list:
-    """Cards due for spaced-repetition review today, across all types, ordered
-    hardest-first (most past errors), shuffled within each error tier."""
+    """The day's review: due cards across all types, hardest-first (most past
+    errors), shuffled within each error tier, capped at REVIEW_CAP."""
     due  = set(db.get_due_ids(user_id))
     weak = db.get_weak_ids(user_id)                 # {card_key: unknown_count}
     deck = [item for item in _mixed_pool() if card_key(item) in due]
     random.shuffle(deck)                            # randomize within equal tiers
     deck.sort(key=lambda it: weak.get(card_key(it), 0), reverse=True)
-    return deck
+    return deck[:REVIEW_CAP]
 
 
 def _due_count(user_id: int | None) -> int:
@@ -355,16 +360,17 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
             "и снова в конце — так слова запоминаются лучше.\n\n"
             "*Выбери тему и начнём!*"
         )
-    due = _due_count(user_id)
+    due = min(_due_count(user_id), REVIEW_CAP)        # daily review is capped
 
     if not welcome:
         # Context lives in the text so the buttons below read clearly.
         info = []
         if resume:
             label, done, total = resume
-            info.append(f"⏸ *На паузе:* {label} · {done}/{total}")
+            info.append(f"⏸ *На паузе:* {label} — осталось {total - done}")
         if due:
-            info.append(f"🔄 *К повторению:* {due} — из всех тем")
+            info.append(f"🔔 *Тренировка дня:* {due} {_card_plural_nom(due)} "
+                        f"— со всех тем, сложные первыми")
         header = _progress_header(user_id)
         blocks = []
         if info:   blocks.append("\n".join(info))
@@ -376,8 +382,10 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
         rows.append([InlineKeyboardButton("▶️ Продолжить", callback_data="resume_session")])
     if due:
         rows.append([InlineKeyboardButton(f"🔔 Повторить ({due})", callback_data="start_due")])
-    rows.append([InlineKeyboardButton("📚 Выбрать тему", callback_data="menu_topics")])
-    rows.append([InlineKeyboardButton("⚙️ Профиль",     callback_data="menu_profile")])
+    rows.append([
+        InlineKeyboardButton("📚 Выбрать тему", callback_data="menu_topics"),
+        InlineKeyboardButton("⚙️ Профиль",      callback_data="menu_profile"),
+    ])
     return text, InlineKeyboardMarkup(rows)
 
 
@@ -1535,7 +1543,7 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     for uid in targets:
         try:
-            cnt = _due_count(uid)
+            cnt = min(_due_count(uid), REVIEW_CAP)        # bite-sized daily norm
             if not cnt:
                 continue
             kb = InlineKeyboardMarkup([
@@ -1544,8 +1552,8 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             ])
             await context.bot.send_message(
                 uid,
-                f"🔔 *Пора повторить!*\n\n"
-                f"К повторению: *{cnt}* {_card_plural_nom(cnt)}.\n"
+                f"🔔 *Тренировка дня готова!*\n\n"
+                f"К повторению: *{cnt}* {_card_plural_nom(cnt)} (самые важные).\n"
                 f"Несколько минут — и слова закрепятся надолго 💪",
                 parse_mode="Markdown", reply_markup=kb,
             )
