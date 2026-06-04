@@ -1541,12 +1541,24 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if session is not None and normalize_session(session) is None:
         context.user_data.pop("session", None)
         session = None
-    if not session or not session.get("awaiting_input"):
+    if not session:
         return
 
     chat_id   = update.effective_chat.id
     type_mode = context.user_data.get("type_mode", False)
-    item      = current_item(session)
+
+    # In type mode, any text on the result screen (awaiting_input=False) acts as «Дальше».
+    if not session.get("awaiting_input"):
+        if type_mode and current_item(session) is not None:
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+            advance(session)
+            await show_card(chat_id, session, context.bot, type_mode=True)
+        return
+
+    item = current_item(session)
     if not item:
         return
 
