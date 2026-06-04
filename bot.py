@@ -931,9 +931,6 @@ def mark_unknown(session: dict, item: dict) -> None:
         return
     if not any(card_key(v) == key for v, _ in session["review_buffer"]):
         session["review_buffer"].append((item, random.randint(2, 3)))
-        # Give a clean slate on the retry: hint from the first pass shouldn't
-        # penalise a correct unaided answer in the review round.
-        session.get("hint_used", set()).discard(key)
     if not any(card_key(v) == key for v in session["end_review"]):
         session["end_review"].append(item)
 
@@ -980,6 +977,9 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
     if item is None:
         await show_results(chat_id, session, bot)
         return
+
+    # Each new display is a clean attempt — clear any hint flag from a prior pass.
+    session.get("hint_used", set()).discard(card_key(item))
 
     ex_type = item_type(item)          # per-card, so mixed/review decks work
     tm = type_mode and ex_type == "verbs"   # input applies to any verb card
