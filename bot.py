@@ -11,8 +11,6 @@ from telegram.ext import (
 )
 from telegram.error import BadRequest
 
-from collections import Counter
-
 from verbs import VERBS
 from prepositions import PREPOSITIONS
 from verb_patterns import VERB_PATTERNS
@@ -998,12 +996,14 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
 
     # In type mode the card itself is the prompt — accept a typed answer right away.
     session["awaiting_input"] = tm
+    session["_on_result"] = False          # a question is on screen, not a result
     session["_last_progress"] = progress_line(session, item)
     await safe_edit(bot, chat_id, session["message_id"], text, kb)
     session["first_shown"].add(card_key(item))
 
 
 async def show_results(chat_id: int, session: dict, bot) -> None:
+    session["_on_result"] = False          # intro/final screens are not card results
     if session["phase"] == PHASE_MAIN and session["end_review"]:
         deck = session["end_review"].copy()
         random.shuffle(deck)
@@ -1222,6 +1222,12 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # ── Pause (keep the session so it can be resumed from the main menu) ──
     if data == "stop_session":
+        paused = context.user_data.get("session")
+        if paused:
+            # The card is hidden behind the menu now — stop treating typed text
+            # as an answer or as «Дальше» until the session is resumed.
+            paused["awaiting_input"] = False
+            paused["_on_result"] = False
         resume = _resume_info(context)
         text, kb = build_type_selector(user_id=user_id, resume=resume)
         if resume:
@@ -1475,6 +1481,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             mark_known(session, item)
         else:
             mark_unknown(session, item)
+        session["_on_result"] = True
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
         return
 
@@ -1528,6 +1535,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data == "reveal":                     # «Не помню» in type mode → show forms
         session["awaiting_input"] = False
         mark_unknown(session, item)
+        session["_on_result"] = True
         text, kb = build_type_result(item, None, correct=False)
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
 
@@ -1547,9 +1555,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id   = update.effective_chat.id
     type_mode = context.user_data.get("type_mode", False)
 
-    # In type mode, any text on the result screen (awaiting_input=False) acts as «Дальше».
+    # In type mode, any text on a card RESULT screen acts as «Дальше». The
+    # _on_result flag distinguishes results from question screens (a typed
+    # «in» on a prep card must not skip it) and from the end-review intro.
     if not session.get("awaiting_input"):
-        if type_mode and current_item(session) is not None:
+        if type_mode and session.get("_on_result") and current_item(session) is not None:
             try:
                 await update.message.delete()
             except Exception:
@@ -1592,6 +1602,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         mark_known(session, item)
     else:
         mark_unknown(session, item)        # wrong, or right-but-with-a-hint
+    session["_on_result"] = True
     try:
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
     except BadRequest:
