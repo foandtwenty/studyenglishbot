@@ -212,6 +212,21 @@ def get_lifetime_stats(user_id: int) -> dict:
     }
 
 
+def studied_today(user_id: int) -> bool:
+    """True if the user already finished a session in their local today."""
+    with _conn() as c:
+        row = c.execute("SELECT last_study FROM users WHERE user_id=?", (user_id,)).fetchone()
+        if not row or not row["last_study"]:
+            return False
+        return row["last_study"] >= _user_today(c, user_id).isoformat()
+
+
+def get_user_tomorrow(user_id: int) -> str:
+    """ISO date of the user's local tomorrow (for «завтра к повторению» counts)."""
+    with _conn() as c:
+        return (_user_today(c, user_id) + timedelta(days=1)).isoformat()
+
+
 def get_box(user_id: int, key: str) -> int:
     """Current Leitner box of a card (0 = never answered)."""
     with _conn() as c:

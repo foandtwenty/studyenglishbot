@@ -342,3 +342,61 @@ def test_reverse_mode_full_flow(harness):
     harness.press("undo")
     harness.say(f"{item['v2']} {item['v3']}")
     assert s["results"][bot.card_key(item)] is False
+
+
+def test_menu_done_state_after_daily(harness, monkeypatch):
+    """After the daily plan is done, the menu celebrates and hooks tomorrow."""
+    monkeypatch.setattr(bot, "_daily_counts", lambda uid: (0, 0))
+    database.save_session(1, 5, 0, 5, {f"verbs::v{i}": True for i in range(5)})
+    text, kb = bot.build_type_selector(user_id=1)
+    assert "выполнена" in text
+    assert "вернись завтра" in text
+    assert "start_due" not in str(kb)            # no dead training button
+
+
+def test_final_review_session_hides_repeat_and_hooks_tomorrow(harness):
+    s = bot.new_session("review",
+                        deck=[{"v1": "go", "v2": "went", "v3": "gone",
+                               "translation": "т", "example": "e"}],
+                        user_id=1)
+    bot.mark_known(s, s["queue"][0])
+    text, kb = bot.build_final(s, streak=2)
+    assert "Тренировка дня выполнена" in text
+    assert "repeat_session" not in str(kb)       # no SRS-contradicting rerun
+    assert "В меню" in str(kb)
+
+
+def test_wrong_answer_shows_return_note(harness):
+    harness.press("pick:verbs")
+    harness.press("toggle_mode")
+    harness.press("lvl:1")
+    harness.say("blatantly wrong")
+    assert "Вернётся через пару карточек" in harness.ctx.bot.edits[-1].text
+
+
+def test_weak_screen_offers_training(harness):
+    database.save_session(1, 0, 2, 2, {"verbs::go": False, "prep::x": False})
+    text, kb = bot.build_menu_weak(1)
+    assert "train_weak" in str(kb)
+    harness.press("train_weak")                  # cross-type error deck starts
+    s = harness.ctx.user_data["session"]
+    assert s is not None and s["exercise_type"] == "weak_all"
+    assert len(s["queue"]) == 1                  # only verbs::go exists in content
+
+
+def test_mixed_selector_has_verb_toggles(harness):
+    text, kb = bot.build_size_selector("mixed", type_mode=False, user_id=1)
+    flat = str(kb)
+    assert "toggle_mode" in flat and "toggle_reverse" in flat
+
+
+def test_progress_line_has_bar(harness):
+    harness.press("pick:verbs")
+    harness.press("lvl:1")
+    assert "░" in harness.ctx.bot.edits[-1].text  # glanceable bar on the card
+
+
+def test_history_renders_bars(harness):
+    database.save_session(1, 8, 2, 10, {f"verbs::h{i}": i < 8 for i in range(10)})
+    text, _ = bot.build_menu_history(1)
+    assert "▓" in text and "8/10 (80%)" in text

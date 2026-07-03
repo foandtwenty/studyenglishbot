@@ -44,14 +44,15 @@ PHASE_MAIN = "main"
 PHASE_END_REVIEW = "end_review"
 
 TYPE_EMOJI = {"verbs": "🔤", "prep": "📍", "vp": "➕", "adjprep": "🔗",
-              "mixed": "🎲", "review": "🔔"}
+              "mixed": "🎲", "review": "🎯", "weak_all": "📋"}
 TYPE_LABEL = {
-    "verbs":   "Неправильные глаголы",
-    "prep":    "Предлоги in / on / at",
-    "vp":      "Глаголы + to / -ing",
-    "adjprep": "Прилагательные + предлог",
-    "mixed":   "Всё вперемешку",
-    "review":  "Тренировка дня",
+    "verbs":    "Неправильные глаголы",
+    "prep":     "Предлоги in / on / at",
+    "vp":       "Глаголы + to / -ing",
+    "adjprep":  "Прилагательные + предлог",
+    "mixed":    "Всё вперемешку",
+    "review":   "Тренировка дня",
+    "weak_all": "Сложные карточки",
 }
 
 HELP_TEXT = (
@@ -65,7 +66,7 @@ HELP_TEXT = (
     "Сначала вспоминаешь сам, затем смотришь ответ и честно оцениваешь.\n"
     "Ошибочные карточки возвращаются через 2–3 хода и снова в конце.\n\n"
     "*Интервальное повторение:*\n"
-    "🔔 *Повторить* собирает карточки, которым пора освежиться: сложные "
+    "🎯 *Тренировка дня* собирает карточки, которым пора освежиться: сложные "
     "(где ты ошибался) идут первыми и возвращаются часто, а верные — по "
     "растущим интервалам (1, 2, 4, 7… дней), чтобы не забылись.\n\n"
     "*В главном меню:*\n"
@@ -301,6 +302,18 @@ def _mixed_pool() -> list:
     return [item for lst in CONTENT.values() for item in lst]
 
 
+WEAK_ALL_CAP = 30   # keep the cross-type error session humane
+
+
+def _build_weak_deck_all(user_id: int) -> list:
+    """Cross-type error deck for the «🎯 Тренировать» button on the weak-cards
+    screen — hardest first, capped like the daily review."""
+    weak = db.get_weak_ids(user_id)
+    deck = [it for it in _mixed_pool() if card_key(it) in weak]
+    deck.sort(key=lambda it: weak[card_key(it)], reverse=True)
+    return deck[:WEAK_ALL_CAP]
+
+
 ALL_CARD_KEYS = frozenset(card_key(it) for it in _mixed_pool())
 
 # Daily review is capped so it never balloons into a burnout grind. The hardest
@@ -375,6 +388,53 @@ def _due_count(user_id: int | None) -> int:
     except Exception:
         logger.exception("due count failed for user %s", user_id)
         return 0
+
+
+def _bar(done: int, total: int, cells: int = 10) -> str:
+    """Glanceable text progress bar: ▓▓▓░░░░░░░."""
+    if total <= 0:
+        return ""
+    filled = min(cells, round(done / total * cells))
+    return "▓" * filled + "░" * (cells - filled)
+
+
+def _tomorrow_line(user_id: int | None) -> str:
+    """«📆 Завтра к повторению: N карточек» — the comeback hook after finishing
+    the daily training. Empty when nothing is scheduled."""
+    if not user_id:
+        return ""
+    try:
+        tomorrow = db.get_user_tomorrow(user_id)
+        due = len(set(db.get_due_ids(user_id, today=tomorrow)) & ALL_CARD_KEYS)
+    except Exception:
+        return ""
+    if due:
+        return f"📆 Завтра к повторению: *{due}* {_card_plural_nom(due)}"
+    if ALL_CARD_KEYS - db.get_seen_keys(user_id):
+        return "📆 Завтра: новая порция слов"
+    return ""
+
+
+def _done_today_block(user_id: int) -> str:
+    """Main-menu state after the daily plan is finished — the moment that keeps
+    the habit alive, so it celebrates and names tomorrow's stake."""
+    lines = ["✅ *Тренировка дня выполнена!*"]
+    try:
+        streak = db.get_streak(user_id)
+        lt     = db.get_lifetime_stats(user_id)
+    except Exception:
+        return lines[0]
+    if streak:
+        lines.append(f"🔥 Серия: *{streak} {_streak_label(streak)}* — "
+                     f"вернись завтра, чтобы сохранить её.")
+    second = f"Освоено: *{lt['mastered']}*"
+    if lt["learning"]:
+        second += f"  ·  Изучается: *{lt['learning']}*"
+    lines.append(second)
+    tmr = _tomorrow_line(user_id)
+    if tmr:
+        lines.append(tmr)
+    return "\n".join(lines)
 
 
 def _progress_header(user_id: int | None) -> str:
@@ -483,7 +543,7 @@ def progress_line(session: dict, item: dict) -> str:
     if session["phase"] == PHASE_END_REVIEW:
         pos   = session["pos"] + 1
         total = len(session["queue"])
-        return f"_Повторение {pos} / {total}_"
+        return f"🔁 {_bar(pos - 1, total)} _Повторение {pos} / {total}_"
 
     key    = card_key(item)
     is_new = key not in session["first_shown"]
@@ -491,7 +551,7 @@ def progress_line(session: dict, item: dict) -> str:
     total  = session["original_total"]
     counter = f"{done + 1} / {total}" if is_new else f"Повтор · {done} / {total}"
     prefix  = TYPE_EMOJI.get(item_type(item), "📚") if is_new else "🔄"
-    return f"{prefix} _{counter}_"
+    return f"{prefix} {_bar(done, total)} _{counter}_"
 
 
 # ─── Selectors ────────────────────────────────────────────────────────────────
@@ -513,25 +573,38 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
     reviews, new = _daily_counts(user_id)
     daily = reviews + new
 
+    done_today = False
     if not welcome:
         # Context lives in the text so the buttons below read clearly.
+        if not daily and user_id:
+            try:
+                done_today = db.studied_today(user_id)
+            except Exception:
+                done_today = False
         info = []
         if resume:
             label, done, total = resume
             info.append(f"⏸ *На паузе:* {label} — осталось {total - done}")
         if daily:
-            info.append(f"🔔 *Тренировка дня:* {_daily_parts(reviews, new)}")
-        header = _progress_header(user_id)
+            info.append(f"🎯 *Тренировка дня:* {_daily_parts(reviews, new)}")
         blocks = []
-        if info:   blocks.append("\n".join(info))
-        if header: blocks.append(header)
+        if info:
+            blocks.append("\n".join(info))
+        if done_today:
+            # The plan is complete — celebrate and name tomorrow's stake
+            # instead of silently dropping the training button.
+            blocks.append(_done_today_block(user_id))
+        else:
+            header = _progress_header(user_id)
+            if header:
+                blocks.append(header)
         text = "\n\n".join(blocks) if blocks else "📚 *Что хочешь потренировать?*"
 
     rows: list[list[InlineKeyboardButton]] = []
     if resume:
         rows.append([InlineKeyboardButton("▶️ Продолжить", callback_data="resume_session")])
     if daily:
-        rows.append([InlineKeyboardButton(f"🔔 Тренировка дня ({daily})", callback_data="start_due")])
+        rows.append([InlineKeyboardButton(f"🎯 Тренировка дня ({daily})", callback_data="start_due")])
     rows.append([
         InlineKeyboardButton("📚 Выбрать тему", callback_data="menu_topics"),
         InlineKeyboardButton("⚙️ Профиль",      callback_data="menu_profile"),
@@ -620,6 +693,7 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
 
 def build_menu_weak(user_id: int, back_callback: str = "menu_profile",
                     back_label: str = "← Назад") -> tuple[str, InlineKeyboardMarkup]:
+    trainable = 0
     try:
         rows = db.get_weak_verbs(user_id)
         groups: dict[str, list] = {"verbs": [], "vp": [], "adjprep": [], "prep": []}
@@ -627,6 +701,7 @@ def build_menu_weak(user_id: int, back_callback: str = "menu_profile",
             ex_type, sep, iid = r["verb_v1"].partition("::")
             if sep and ex_type in groups:          # skip legacy un-namespaced rows
                 groups[ex_type].append((iid, r["unknown_count"]))
+        trainable = sum(len(g) for g in groups.values())
         lines: list[str] = []
         for ex_type in ("verbs", "vp", "adjprep", "prep"):
             grp = groups[ex_type]
@@ -643,8 +718,13 @@ def build_menu_weak(user_id: int, back_callback: str = "menu_profile",
     except Exception:
         logger.exception("Failed to load weak items for user %s", user_id)
         body = "Не удалось загрузить данные."
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(back_label, callback_data=back_callback)]])
-    return f"📋 *Сложные карточки:*\n{body}", kb
+    rows_kb: list[list[InlineKeyboardButton]] = []
+    if trainable:
+        n = min(trainable, WEAK_ALL_CAP)
+        rows_kb.append([InlineKeyboardButton(f"🎯 Тренировать ({n})",
+                                             callback_data="train_weak")])
+    rows_kb.append([InlineKeyboardButton(back_label, callback_data=back_callback)])
+    return f"📋 *Сложные карточки:*\n{body}", InlineKeyboardMarkup(rows_kb)
 
 
 def build_menu_history(user_id: int, back_callback: str = "menu_profile",
@@ -655,7 +735,12 @@ def build_menu_history(user_id: int, back_callback: str = "menu_profile",
             lines = []
             for r in rows:
                 pct = round(r["known"] / r["total"] * 100) if r["total"] else 0
-                lines.append(f"📅 {r['finished_at']} — {r['known']}/{r['total']} ({pct}%)")
+                # 2026-07-03 -> 03.07 — compact date + a glanceable bar
+                y, _, md = r["finished_at"].partition("-")
+                m, _, d  = md.partition("-")
+                date = f"{d}.{m}" if d else r["finished_at"]
+                lines.append(f"`{date}` {_bar(r['known'], r['total'])} "
+                             f"{r['known']}/{r['total']} ({pct}%)")
             body = "\n".join(lines)
             if len(lines) >= 10:
                 body += "\n\n_показаны последние 10 сессий_"
@@ -720,13 +805,20 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
                         user_id: int | None = None,
                         reverse_mode: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     # Mixed is the "quick interleaved sampler" — sized by count, not level.
+    # The verb-mode toggles live here too: they apply to verb cards in mixed.
     if exercise_type == "mixed":
         text = f"{TYPE_EMOJI['mixed']} *{TYPE_LABEL['mixed']}*\n\nСколько карточек?"
         rows = [[
             InlineKeyboardButton("10", callback_data="size:10"),
             InlineKeyboardButton("20", callback_data="size:20"),
             InlineKeyboardButton("30", callback_data="size:30"),
-        ], [InlineKeyboardButton("← Назад", callback_data="menu_topics")]]
+        ]]
+        label = "✏️ Выключить ввод V2/V3" if type_mode else "✏️ Включить ввод V2/V3"
+        rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
+        rev_label = ("🔄 Направление: RU→EN" if reverse_mode
+                     else "🔄 Направление: EN→RU")
+        rows.append([InlineKeyboardButton(rev_label, callback_data="toggle_reverse")])
+        rows.append([InlineKeyboardButton("← Назад", callback_data="menu_topics")])
         return text, InlineKeyboardMarkup(rows)
 
     # Single types pick by difficulty level, with «освоено / всего» progress.
@@ -764,8 +856,8 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
     if exercise_type == "verbs":
         label = "✏️ Выключить ввод V2/V3" if type_mode else "✏️ Включить ввод V2/V3"
         rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
-        rev_label = ("🔄 RU→EN: вкл (показывать перевод)" if reverse_mode
-                     else "🔄 RU→EN: выкл")
+        rev_label = ("🔄 Направление: RU→EN" if reverse_mode
+                     else "🔄 Направление: EN→RU")
         rows.append([InlineKeyboardButton(rev_label, callback_data="toggle_reverse")])
     rows.append([InlineKeyboardButton("← Назад", callback_data="menu_topics")])
     return text, InlineKeyboardMarkup(rows)
@@ -886,10 +978,16 @@ KB_RESULT = InlineKeyboardMarkup([
 ])
 
 
+RETURN_NOTE = "\n\n🔁 _Вернётся через пару карточек и в конце сессии_"
+
+
 def build_choice_result(item: dict, chosen: str, correct: bool,
-                        interval_line: str = "") -> tuple[str, InlineKeyboardMarkup]:
+                        interval_line: str = "",
+                        returning: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     kb_next = KB_RESULT
     head = "✅ *Верно!*" if correct else "❌ *Неверно.*"
+    if not correct and returning:
+        interval_line = RETURN_NOTE
 
     if "sentence" in item:
         full      = item["sentence"].replace("{?}", f"*{item['answer']}*")
@@ -921,7 +1019,8 @@ def build_choice_result(item: dict, chosen: str, correct: bool,
 
 def build_type_result(item: dict, user_input: str | None, correct: bool,
                       hinted: bool = False, typo: bool = False,
-                      interval_line: str = "") -> tuple[str, InlineKeyboardMarkup]:
+                      interval_line: str = "",
+                      returning: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     # The verb itself stays visible on the result — the question text is gone
     # after the edit, and in RU→EN mode the verb IS the answer.
     forms     = f"*{item['v1']}*\n{_verb_forms_text(item)}"
@@ -947,7 +1046,8 @@ def build_type_result(item: dict, user_input: str | None, correct: bool,
         f"{forms}\n"
         f"_{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
-        f"{note_line}",
+        f"{note_line}"
+        f"{RETURN_NOTE if returning else ''}",
         KB_RESULT,
     )
 
@@ -980,7 +1080,9 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
     streak_line = f"🔥 Серия: *{streak} {_streak_label(streak)}*\n" if streak else ""
 
     size_label = f"{session['original_total']} {_card_plural_nom(session['original_total'])}"
-    subtitle   = f"_{TYPE_LABEL.get(ex_type, '')} · {size_label}_\n\n"
+    # The daily-training final already says «Тренировка дня» in its title.
+    subtitle   = (f"_{size_label}_\n\n" if ex_type == "review"
+                  else f"_{TYPE_LABEL.get(ex_type, '')} · {size_label}_\n\n")
 
     unknown_keys  = [k for k, ok in results.items() if not ok]
     unknown_block = ""
@@ -1017,25 +1119,35 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
 
     known_line   = f"Знаю: *{known}* {_card_plural(known)}\n" if known else ""
     unknown_line = f"Ещё учу: *{unknown}* {_card_plural(unknown)}\n" if unknown else ""
+
+    # The daily training gets a completion celebration + tomorrow hook instead
+    # of «Ещё раунд»: the cards were just rescheduled, an immediate rerun is a
+    # dead end that contradicts spaced repetition.
+    is_daily = ex_type == "review"
+    title    = "✅ *Тренировка дня выполнена!*" if is_daily else "🎉 *Сессия завершена!*"
+    tmr      = _tomorrow_line(session.get("user_id")) if is_daily else ""
+    tmr_line = f"\n\n{tmr} — жду тебя!" if tmr else ""
+
     text = (
-        f"🎉 *Сессия завершена!*\n"
+        f"{title}\n"
         f"{subtitle}"
         f"{known_line}"
         f"{unknown_line}"
         f"Результат: *{pct}%*\n"
         f"{streak_line}"
         f"\n{grade}"
+        f"{tmr_line}"
         f"{unknown_block}"
     )
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Ещё раунд", callback_data="repeat_session")],
-        [
-            InlineKeyboardButton("📋 Сложные", callback_data="final_weak"),
-            InlineKeyboardButton("📈 История", callback_data="final_history"),
-        ],
-        [InlineKeyboardButton("🏠 Другая тема", callback_data="new_session")],
+    rows = []
+    if not is_daily:
+        rows.append([InlineKeyboardButton("🔄 Ещё раунд", callback_data="repeat_session")])
+    rows.append([
+        InlineKeyboardButton("📋 Сложные", callback_data="final_weak"),
+        InlineKeyboardButton("📈 История", callback_data="final_history"),
     ])
-    return text, kb
+    rows.append([InlineKeyboardButton("🏠 В меню", callback_data="new_session")])
+    return text, InlineKeyboardMarkup(rows)
 
 
 # ─── Session mutations ────────────────────────────────────────────────────────
@@ -1538,6 +1650,21 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await show_card(chat_id, session, context.bot, type_mode=type_mode, reverse=reverse_mode)
         return
 
+    if data == "train_weak":                # «🎯 Тренировать» on the weak-cards screen
+        deck = _build_weak_deck_all(user_id)
+        if not deck:
+            await query.answer("Ошибок больше нет — отличная работа! 🎉", show_alert=True)
+            return
+        session = new_session("weak_all", deck=deck, user_id=user_id)
+        context.user_data["last_type"] = "weak_all"
+        context.user_data["last_size"] = "weak_all"
+        msg_id = query.message.message_id
+        session["message_id"] = msg_id
+        context.user_data["card_message_id"] = msg_id
+        context.user_data["session"] = session
+        await show_card(chat_id, session, context.bot, type_mode=type_mode, reverse=reverse_mode)
+        return
+
     if data == "new_session":
         context.user_data.pop("session", None)        # «Другая тема» — clear finished session
         text, kb = build_type_selector(user_id=user_id)
@@ -1567,6 +1694,12 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await query.answer("На сегодня всё пройдено — загляни позже 👍", show_alert=True)
                 return
             session = new_session("review", user_id=user_id, deck=deck)
+        elif last_size == "weak_all":
+            deck = _build_weak_deck_all(user_id)
+            if not deck:
+                await query.answer("Ошибок больше нет — отличная работа! 🎉", show_alert=True)
+                return
+            session = new_session("weak_all", user_id=user_id, deck=deck)
         elif last_size.startswith("lvl:"):
             deck = _level_deck(ex_type, int(last_size[4:]))
             if not deck:
@@ -1641,7 +1774,8 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         known_now      = correct and card_key(item) not in session.get("ever_wrong", set())
         snapshot_for_undo(session, item)
         text, kb       = build_choice_result(item, chosen, correct,
-                                             interval_line=_interval_line(session, item, known_now))
+                                             interval_line=_interval_line(session, item, known_now),
+                                             returning=session["phase"] == PHASE_MAIN)
         if correct:
             mark_known(session, item)
         else:
@@ -1678,7 +1812,8 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             hint_line = (f"💡 V2 на *{v2[0].lower()}…* ({len(v2)}) · "
                          f"V3 на *{v3[0].lower()}…* ({len(v3)})")
             header    = f"*{item['v1']}*\n_{item['translation']}_"
-        base = f"{prog}\n\n{header}\n\n{hint_line}"
+        base = (f"{prog}\n\n{header}\n\n{hint_line}\n"
+                f"_🔁 после подсказки карточка идёт в повтор_")
         if tm:
             text = (f"{base}\n\n✍️ Напиши глагол и формы (V1 V2 V3):" if reverse_mode
                     else f"{base}\n\n✍️ Напиши V2 и V3 через пробел:")
@@ -1709,7 +1844,8 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         snapshot_for_undo(session, item)
         mark_unknown(session, item)
         session["_on_result"] = True
-        text, kb = build_type_result(item, None, correct=False)
+        text, kb = build_type_result(item, None, correct=False,
+                                     returning=session["phase"] == PHASE_MAIN)
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
 
     elif data == "undo":                       # «↩️ Отмена» on a result screen
@@ -1764,7 +1900,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     known_now = correct and not hinted and card_key(item) not in session.get("ever_wrong", set())
     snapshot_for_undo(session, item)
     text, kb = build_type_result(item, raw, correct, hinted=hinted, typo=typo,
-                                 interval_line=_interval_line(session, item, known_now))
+                                 interval_line=_interval_line(session, item, known_now),
+                                 returning=session["phase"] == PHASE_MAIN)
     if correct and not hinted:
         mark_known(session, item)
     else:
@@ -1801,7 +1938,7 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             if not cnt:
                 continue
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"🔔 Тренировка дня ({cnt})", callback_data="start_due")],
+                [InlineKeyboardButton(f"🎯 Тренировка дня ({cnt})", callback_data="start_due")],
                 [InlineKeyboardButton("🔕 Отключить", callback_data="reminders_off")],
             ])
             await context.bot.send_message(
