@@ -155,7 +155,7 @@ def test_profile_then_stats_then_back_navigation(harness):
     flat = str(harness.ctx.bot.edits[-1].kb)
     assert "menu_stats" in flat and "menu_weak" in flat and "back_to_types" in flat
     harness.press("menu_stats")
-    assert "Статистика" in harness.ctx.bot.edits[-1].text
+    assert "Прогресс" in harness.ctx.bot.edits[-1].text
     # back goes to profile, not main
     assert "menu_profile" in str(harness.ctx.bot.edits[-1].kb)
 

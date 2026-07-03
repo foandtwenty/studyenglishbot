@@ -80,7 +80,7 @@ HELP_TEXT = (
     "Одна опечатка в длинном слове прощается. На экране результата любой "
     "текст работает как «Дальше», а «↩️ Отмена» позволяет переответить.\n\n"
     "*⚙️ В Профиле:*\n"
-    "📊 Статистика · 📈 История · 📋 Сложные карточки (со своей тренировкой) "
+    "📊 Прогресс · 📈 История · 📋 Сложные карточки (со своей тренировкой) "
     "· 🔔 Напоминания (время и часовой пояс)"
 )
 
@@ -604,7 +604,7 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
     if daily:
         rows.append([InlineKeyboardButton(f"🎯 Тренировка дня ({daily})", callback_data="start_due")])
     rows.append([
-        InlineKeyboardButton("📚 Выбрать тему", callback_data="menu_topics"),
+        InlineKeyboardButton("📚 Темы", callback_data="menu_topics"),
         InlineKeyboardButton("⚙️ Профиль",      callback_data="menu_profile"),
     ])
     return text, InlineKeyboardMarkup(rows)
@@ -624,20 +624,21 @@ def build_menu_topics() -> tuple[str, InlineKeyboardMarkup]:
 
 def build_menu_profile(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     header = _progress_header(user_id)
-    text   = (f"{header}\n\n" if header else "") + "⚙️ *Профиль и прогресс*"
+    text   = (f"{header}\n\n" if header else "") + "⚙️ *Профиль*"
     # Data first, the actionable weak-cards screen on its own row, settings
     # and help below — «Напоминания» is a setting, not a help topic.
+    # Paired-row labels stay ≤ 9 letters: longer ones truncate on narrow phones.
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📊 Статистика", callback_data="menu_stats"),
-            InlineKeyboardButton("📈 История",    callback_data="menu_history"),
+            InlineKeyboardButton("📊 Прогресс", callback_data="menu_stats"),
+            InlineKeyboardButton("📈 История",  callback_data="menu_history"),
         ],
         [InlineKeyboardButton("📋 Сложные карточки", callback_data="menu_weak")],
+        [InlineKeyboardButton("🔔 Напоминания",      callback_data="menu_reminders")],
         [
-            InlineKeyboardButton("🔔 Напоминания", callback_data="menu_reminders"),
-            InlineKeyboardButton("❓ Помощь",      callback_data="menu_help"),
+            InlineKeyboardButton("❓ Помощь", callback_data="menu_help"),
+            InlineKeyboardButton("← Назад",  callback_data="back_to_types"),
         ],
-        [InlineKeyboardButton("← Назад", callback_data="back_to_types")],
     ])
     return text, kb
 
@@ -674,7 +675,7 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
         known_line   = f"Знаю: *{known}*\n" if known else ""
         unknown_line = f"Ещё учу: *{unknown}*\n" if unknown else ""
         current_block = (
-            f"📊 *Текущая сессия*\n"
+            f"📊 *Текущая тренировка*\n"
             f"_{TYPE_LABEL.get(ex_type, '')}_\n\n"
             f"{known_line}"
             f"{unknown_line}"
@@ -684,7 +685,7 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
         )
     else:
         current_block = (
-            f"📊 *Статистика*\n\n{streak_line}"
+            f"📊 *Прогресс*\n\n{streak_line}"
             f"Активной тренировки нет. Выбери тему в меню и начни! 🚀\n"
         )
 
