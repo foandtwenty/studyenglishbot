@@ -583,7 +583,9 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
         if resume:
             label, done, total = resume
             info.append(f"⏸ *На паузе:* {label} — осталось {total - done}")
-        if daily:
+        # The button already shows the daily count; a text line is added only
+        # when it explains the composition (both reviews AND new cards).
+        if reviews and new:
             info.append(f"🎯 *Тренировка дня:* {_daily_parts(reviews, new)}")
         blocks = []
         if info:
@@ -600,7 +602,10 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
 
     rows: list[list[InlineKeyboardButton]] = []
     if resume:
-        rows.append([InlineKeyboardButton("▶️ Продолжить", callback_data="resume_session")])
+        rows.append([
+            InlineKeyboardButton("▶️ Продолжить", callback_data="resume_session"),
+            InlineKeyboardButton("✖️ Сброс",      callback_data="discard_session"),
+        ])
     if daily:
         rows.append([InlineKeyboardButton(f"🎯 Тренировка дня ({daily})", callback_data="start_due")])
     rows.append([
@@ -800,6 +805,16 @@ def build_reminder_settings(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     return text, kb
 
 
+def _verb_toggles_row(type_mode: bool, reverse_mode: bool) -> list[InlineKeyboardButton]:
+    """One compact row for both verb-mode settings (labels fit narrow screens)."""
+    return [
+        InlineKeyboardButton("✏️ Ввод: вкл" if type_mode else "✏️ Ввод: выкл",
+                             callback_data="toggle_mode"),
+        InlineKeyboardButton("🔄 RU→EN" if reverse_mode else "🔄 EN→RU",
+                             callback_data="toggle_reverse"),
+    ]
+
+
 def build_size_selector(exercise_type: str, type_mode: bool = False,
                         user_id: int | None = None,
                         reverse_mode: bool = False) -> tuple[str, InlineKeyboardMarkup]:
@@ -812,11 +827,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
             InlineKeyboardButton("20", callback_data="size:20"),
             InlineKeyboardButton("30", callback_data="size:30"),
         ]]
-        label = "✏️ Ввод ответа: вкл" if type_mode else "✏️ Ввод ответа: выкл"
-        rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
-        rev_label = ("🔄 Направление: RU→EN" if reverse_mode
-                     else "🔄 Направление: EN→RU")
-        rows.append([InlineKeyboardButton(rev_label, callback_data="toggle_reverse")])
+        rows.append(_verb_toggles_row(type_mode, reverse_mode))
         rows.append([InlineKeyboardButton("← Назад", callback_data="menu_topics")])
         return text, InlineKeyboardMarkup(rows)
 
@@ -832,7 +843,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
         return sum(1 for i in items if card_key(i) in known)
 
     text = (f"{TYPE_EMOJI.get(exercise_type, '🎯')} *{TYPE_LABEL[exercise_type]}*\n\n"
-            f"С чего начнём?\n_цифры — освоено из всего_")
+            f"С чего начнём? _(цифры — освоено)_")
     rows: list[list[InlineKeyboardButton]] = []
     for lvl in (1, 2, 3):
         lvl_items = [i for i in cards if item_level(i) == lvl]
@@ -853,11 +864,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
             pass
 
     if exercise_type == "verbs":
-        label = "✏️ Ввод ответа: вкл" if type_mode else "✏️ Ввод ответа: выкл"
-        rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
-        rev_label = ("🔄 Направление: RU→EN" if reverse_mode
-                     else "🔄 Направление: EN→RU")
-        rows.append([InlineKeyboardButton(rev_label, callback_data="toggle_reverse")])
+        rows.append(_verb_toggles_row(type_mode, reverse_mode))
     rows.append([InlineKeyboardButton("← Назад", callback_data="menu_topics")])
     return text, InlineKeyboardMarkup(rows)
 
@@ -1499,9 +1506,30 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             paused["awaiting_input"] = False
             paused["_on_result"] = False
         resume = _resume_info(context)
+        # No extra banner: the menu's own «⏸ На паузе:» line already says it.
         text, kb = build_type_selector(user_id=user_id, resume=resume)
-        if resume:
-            text = "_⏸ Тренировка на паузе — продолжишь, когда удобно._\n\n" + text
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    if data == "discard_session":           # «✖️ Сброс» next to «Продолжить»
+        if _resume_info(context) is None:
+            text, kb = build_type_selector(user_id=user_id)
+            await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+            return
+        label = TYPE_LABEL.get(context.user_data["session"].get("exercise_type", ""), "")
+        text = (f"✖️ *Сбросить тренировку на паузе?*\n"
+                f"_{label}_\n\n"
+                f"Прогресс этой тренировки не сохранится.")
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗑 Да, сбросить", callback_data="discard_yes")],
+            [InlineKeyboardButton("← Назад",         callback_data="back_to_types")],
+        ])
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    if data == "discard_yes":
+        context.user_data.pop("session", None)
+        text, kb = build_type_selector(user_id=user_id)
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 

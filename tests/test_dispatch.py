@@ -400,3 +400,41 @@ def test_history_renders_bars(harness):
     database.save_session(1, 8, 2, 10, {f"verbs::h{i}": i < 8 for i in range(10)})
     text, _ = bot.build_menu_history(1)
     assert "▓" in text and "8/10 (80%)" in text
+
+
+def test_discard_paused_session_with_confirmation(harness):
+    harness.press("pick:verbs")
+    harness.press("lvl:1")
+    harness.press("stop_session")                    # pause
+    assert harness.ctx.user_data.get("session") is not None
+    harness.press("discard_session")                 # ✖️ Сброс → confirm screen
+    assert "Сбросить тренировку" in harness.ctx.bot.edits[-1].text
+    assert harness.ctx.user_data.get("session") is not None   # not yet dropped
+    harness.press("discard_yes")
+    assert harness.ctx.user_data.get("session") is None       # gone
+    assert "resume_session" not in str(harness.ctx.bot.edits[-1].kb)
+
+
+def test_discard_back_keeps_session(harness):
+    harness.press("pick:verbs")
+    harness.press("lvl:1")
+    harness.press("stop_session")
+    harness.press("discard_session")
+    harness.press("back_to_types")                   # ← Назад on the confirm screen
+    assert harness.ctx.user_data.get("session") is not None
+    assert "resume_session" in str(harness.ctx.bot.edits[-1].kb)
+
+
+def test_menu_no_pause_banner_duplication(harness):
+    harness.press("pick:verbs")
+    harness.press("lvl:1")
+    harness.press("stop_session")
+    text = harness.ctx.bot.edits[-1].text
+    assert text.count("пауз") == 1                   # one mention, not two
+
+
+def test_selector_single_toggles_row(harness):
+    _, kb = bot.build_size_selector("verbs", type_mode=True, user_id=1)
+    toggle_rows = [r for r in kb.inline_keyboard
+                   if any(b.callback_data in ("toggle_mode", "toggle_reverse") for b in r)]
+    assert len(toggle_rows) == 1 and len(toggle_rows[0]) == 2   # one compact row
