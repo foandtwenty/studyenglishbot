@@ -76,10 +76,13 @@ HELP_TEXT = (
     "Выбери уровень — 🟢 Базовый (самые частые), 🟡 Средний, 🔴 Продвинутый "
     "— или «📚 Все».\n"
     "🎯 Только ошибки — тренировать лишь сложные карточки\n"
-    "✏️ Режим ввода — печатай формы вместо кнопок (проверка выученного)\n\n"
+    "✏️ Режим ввода — печатай формы вместо кнопок (проверка выученного)\n"
+    "🔄 RU→EN — показывается перевод, вспоминаешь глагол и формы\n\n"
     "*На карточке глагола:*\n"
-    "💡 Подсказка — первые буквы и длина V2/V3\n"
-    "В режиме ввода просто отправь V2 и V3 в чат; «❓ Не помню» покажет ответ"
+    "💡 Подсказка — первые буквы и длина форм\n"
+    "В режиме ввода просто отправь формы в чат; «❓ Не помню» покажет ответ. "
+    "Одна опечатка в длинном слове прощается. На экране результата любой "
+    "текст работает как «Дальше», а «↩️ Отмена» позволяет переответить."
 )
 
 
@@ -127,7 +130,7 @@ SIZE_MAP = {"10": 10, "20": 20, "30": 30, "all": None}
 # Callbacks that mutate the active session — used by the stale-message guard:
 # taps on old card messages (user scrolled up) must not corrupt the current card.
 SESSION_MUTATING = frozenset({
-    "ans", "knew", "didnt_know", "reveal", "next",
+    "ans", "knew", "didnt_know", "reveal", "next", "undo",
     "hint", "show", "finish_session", "start_review",
 })
 
@@ -179,6 +182,97 @@ def _norm_forms(s: str) -> list[str]:
     tokens = s.lower().replace("/", " ").split()
     stripped = (re.sub(r"^[^\w]+|[^\w]+$", "", t) for t in tokens)
     return [t for t in stripped if t]
+
+
+def _edit_distance_1(a: str, b: str) -> bool:
+    """True if a and b differ by exactly one edit: substitution, insertion,
+    deletion, or an adjacent transposition («brougth») — the most common slip."""
+    la, lb = len(a), len(b)
+    if a == b or abs(la - lb) > 1:
+        return False
+    if la == lb:
+        diffs = [i for i in range(la) if a[i] != b[i]]
+        if len(diffs) == 1:
+            return True
+        return (len(diffs) == 2 and diffs[1] == diffs[0] + 1
+                and a[diffs[0]] == b[diffs[1]] and a[diffs[1]] == b[diffs[0]])
+    if la > lb:
+        a, b, la, lb = b, a, lb, la
+    i = j = 0
+    skipped = False
+    while i < la:
+        if a[i] == b[j]:
+            i += 1; j += 1
+        elif skipped:
+            return False
+        else:
+            skipped = True; j += 1
+    return True
+
+
+# Typo forgiveness applies only to reasonably long forms: distance-1 on short
+# words like went/want or come/came is a different word, not a slip.
+TYPO_MIN_LEN = 5
+
+
+def check_typed_answer(item: dict, raw: str, reverse: bool = False) -> tuple[bool, bool]:
+    """(correct, had_typo) for a typed verb answer.
+
+    Forward: all tokens before the last must be V2 variants, the last must be
+    V3 («went gone», «was/were been»); V2==V3 verbs accept one word. Reverse
+    (RU→EN): V1 comes first, then the same. A token may contain one typo
+    (len ≥ TYPO_MIN_LEN) — unless it exactly matches a DIFFERENT form of the
+    verb, which is form confusion, not a slip.
+    """
+    parts = _norm_forms(raw)
+    v1, v2, v3 = (_norm_forms(item[k]) for k in ("v1", "v2", "v3"))
+    all_forms = (set(v1) if reverse else set()) | set(v2) | set(v3)
+
+    def match(tok: str, expected: list[str]) -> tuple[bool, bool]:
+        if tok in expected:
+            return True, False
+        if tok in all_forms:
+            return False, False
+        for cand in expected:
+            if len(cand) >= TYPO_MIN_LEN and _edit_distance_1(tok, cand):
+                return True, True
+        return False, False
+
+    typo = False
+    if reverse:
+        if not parts:
+            return False, False
+        ok, t = match(parts[0], v1)
+        if not ok:
+            return False, False
+        typo |= t
+        parts = parts[1:]
+        if set(v1) == set(v2) == set(v3):
+            # cut/cut/cut: the verb alone proves it; extra tokens must be right
+            res = [match(p, v2) for p in parts]
+            if not all(m for m, _ in res):
+                return False, False
+            return True, typo or any(t for _, t in res)
+        if not parts:
+            return False, False              # forms are still required
+
+    if set(v2) == set(v3):
+        if not parts:
+            return False, False
+        res = [match(p, v2) for p in parts]
+        if not all(m for m, _ in res):
+            return False, False
+        return True, typo or any(t for _, t in res)
+
+    if len(parts) < 2:
+        return False, False
+    ok_last, t_last = match(parts[-1], v3)
+    if not ok_last:
+        return False, False
+    res = [match(p, v2) for p in parts[:-1]]
+    if not all(m for m, _ in res):
+        return False, False
+    return True, typo or t_last or any(t for _, t in res)
 
 
 def _sanitize_user_text(s: str) -> str:
@@ -623,7 +717,8 @@ def build_reminder_settings(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
 
 
 def build_size_selector(exercise_type: str, type_mode: bool = False,
-                        user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
+                        user_id: int | None = None,
+                        reverse_mode: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     # Mixed is the "quick interleaved sampler" — sized by count, not level.
     if exercise_type == "mixed":
         text = f"{TYPE_EMOJI['mixed']} *{TYPE_LABEL['mixed']}*\n\nСколько карточек?"
@@ -669,35 +764,37 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
     if exercise_type == "verbs":
         label = "✏️ Выключить ввод V2/V3" if type_mode else "✏️ Включить ввод V2/V3"
         rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
+        rev_label = ("🔄 RU→EN: вкл (показывать перевод)" if reverse_mode
+                     else "🔄 RU→EN: выкл")
+        rows.append([InlineKeyboardButton(rev_label, callback_data="toggle_reverse")])
     rows.append([InlineKeyboardButton("← Назад", callback_data="menu_topics")])
     return text, InlineKeyboardMarkup(rows)
 
 
 # ─── Card builders ────────────────────────────────────────────────────────────
 
-def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+def build_verb_card(session: dict, type_mode: bool = False,
+                    reverse: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     item = current_item(session)
     prog = progress_line(session, item)
 
+    if reverse:   # RU→EN: the translation is the prompt, the verb is the answer
+        prompt = f"*{item['translation']}*"
+        ask    = ("✍️ Напиши глагол и формы (V1 V2 V3):" if type_mode
+                  else "Вспомни глагол и его формы:")
+    else:
+        prompt = f"*{item['v1']}*\n_{item['translation']}_"
+        ask    = ("✍️ Напиши V2 и V3 через пробел:" if type_mode
+                  else "Вспомни формы — потом загляни в ответ:")
+    text = f"{prog}\n\n{prompt}\n\n{ask}"
+
     if type_mode:
-        text = (
-            f"{prog}\n\n"
-            f"*{item['v1']}*\n"
-            f"_{item['translation']}_\n\n"
-            f"✍️ Напиши V2 и V3 через пробел:"
-        )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("💡 Подсказка", callback_data="hint")],
             [InlineKeyboardButton("❓ Не помню",  callback_data="reveal"),
              InlineKeyboardButton("⏸ Пауза",      callback_data="stop_session")],
         ])
     else:
-        text = (
-            f"{prog}\n\n"
-            f"*{item['v1']}*\n"
-            f"_{item['translation']}_\n\n"
-            f"Вспомни формы — потом загляни в ответ:"
-        )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
             [InlineKeyboardButton("💡 Подсказка",      callback_data="hint")],
@@ -709,7 +806,7 @@ def build_verb_card(session: dict, type_mode: bool = False) -> tuple[str, Inline
 def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     item      = current_item(session)
     prog      = session.get("_last_progress") or progress_line(session, item)
-    forms     = _verb_forms_text(item)
+    forms     = f"*{item['v1']}*\n{_verb_forms_text(item)}"
     note_line = f"\n\n📖 _{item['note']}_" if item.get("note") else ""
     text  = (
         f"{prog}\n\n"
@@ -783,16 +880,21 @@ def build_adjprep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
     return text, kb
 
 
-def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, InlineKeyboardMarkup]:
-    kb_next = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➡️ Дальше", callback_data="next")],
-    ])
+KB_RESULT = InlineKeyboardMarkup([
+    [InlineKeyboardButton("➡️ Дальше", callback_data="next"),
+     InlineKeyboardButton("↩️ Отмена", callback_data="undo")],
+])
+
+
+def build_choice_result(item: dict, chosen: str, correct: bool,
+                        interval_line: str = "") -> tuple[str, InlineKeyboardMarkup]:
+    kb_next = KB_RESULT
     head = "✅ *Верно!*" if correct else "❌ *Неверно.*"
 
     if "sentence" in item:
         full      = item["sentence"].replace("{?}", f"*{item['answer']}*")
         wrong_ans = "" if correct else f" Правильный ответ: *{item['answer']}*"
-        return f"{head}{wrong_ans}\n\n{full}\n\n📖 _{item['rule']}_", kb_next
+        return f"{head}{wrong_ans}\n\n{full}\n\n📖 _{item['rule']}_{interval_line}", kb_next
 
     rule_line = f"\n\n📖 _{item['rule']}_" if item.get("rule") else ""
 
@@ -802,7 +904,7 @@ def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, In
             f"{head}{wrong_ans}\n\n"
             f"*{item['adjective']}* + *{item['preposition']}*\n\n"
             f"💬 _{item['example']}_"
-            f"{rule_line}",
+            f"{rule_line}{interval_line}",
             kb_next,
         )
 
@@ -812,27 +914,31 @@ def build_choice_result(item: dict, chosen: str, correct: bool) -> tuple[str, In
         f"{head}{wrong_ans}\n\n"
         f"*{verb_display}* + *{item['pattern']}*\n\n"
         f"💬 _{item['example']}_"
-        f"{rule_line}",
+        f"{rule_line}{interval_line}",
         kb_next,
     )
 
 
 def build_type_result(item: dict, user_input: str | None, correct: bool,
-                      hinted: bool = False) -> tuple[str, InlineKeyboardMarkup]:
-    forms     = _verb_forms_text(item)
+                      hinted: bool = False, typo: bool = False,
+                      interval_line: str = "") -> tuple[str, InlineKeyboardMarkup]:
+    # The verb itself stays visible on the result — the question text is gone
+    # after the edit, and in RU→EN mode the verb IS the answer.
+    forms     = f"*{item['v1']}*\n{_verb_forms_text(item)}"
     note_line = f"\n\n📖 _{item['note']}_" if item.get("note") else ""
-    kb_next   = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➡️ Дальше", callback_data="next")],
-    ])
     if correct:
-        head = ("🟡 *Верно, но с подсказкой* — повторим, чтобы запомнить:"
-                if hinted else "✅ *Верно!*")
+        if hinted:
+            head = "🟡 *Верно, но с подсказкой* — повторим, чтобы запомнить:"
+        elif typo:
+            head = "✅ *Верно, но с опечаткой* — сверь написание:"
+        else:
+            head = "✅ *Верно!*"
         return (
             f"{head}\n\n"
             f"{forms}\n\n"
             f"💬 _{item['example']}_"
-            f"{note_line}",
-            kb_next,
+            f"{note_line}{interval_line}",
+            KB_RESULT,
         )
     head = ("❌ *Не помню* — вот формы:" if user_input is None
             else f"❌ *Твой ответ:* `{_sanitize_user_text(user_input)}`")
@@ -842,7 +948,7 @@ def build_type_result(item: dict, user_input: str | None, correct: bool,
         f"_{item['translation']}_\n\n"
         f"💬 _{item['example']}_"
         f"{note_line}",
-        kb_next,
+        KB_RESULT,
     )
 
 
@@ -950,6 +1056,62 @@ def mark_unknown(session: dict, item: dict) -> None:
         session["end_review"].append(item)
 
 
+def _interval_line(session: dict, item: dict, known_now: bool) -> str:
+    """«📅 Повтор через N дней» for a card just answered correctly (Anki-style
+    transparency). Omitted when the card is headed back to box 1 anyway."""
+    uid = session.get("user_id")
+    if not uid or not known_now:
+        return ""
+    try:
+        box = db.get_box(uid, card_key(item))
+    except Exception:
+        return ""
+    days = db.LEITNER_DAYS[min(box + 1, db.MAX_BOX)]
+    return f"\n\n📅 Повтор через {days} {_plural(days, 'день', 'дня', 'дней')}"
+
+
+def snapshot_for_undo(session: dict, item: dict) -> None:
+    """Remember the card's pre-answer state so «↩️ Отмена» on the result screen
+    can restore it exactly (result, ever_wrong, hint, review/end queues)."""
+    key = card_key(item)
+    session["_undo"] = {
+        "key":            key,
+        "had_result":     key in session["results"],
+        "prev_result":    session["results"].get(key),
+        "was_ever_wrong": key in session.get("ever_wrong", set()),
+        "was_hinted":     key in session.get("hint_used", set()),
+        "in_buffer":      any(card_key(v) == key for v, _ in session["review_buffer"]),
+        "in_end":         any(card_key(v) == key for v in session["end_review"]),
+    }
+
+
+def undo_last_answer(session: dict) -> bool:
+    """Restore the state saved by snapshot_for_undo. Valid only while the
+    answered card is still current (result screen). Returns success."""
+    u = session.get("_undo")
+    item = current_item(session)
+    if not u or not item or u["key"] != card_key(item):
+        return False
+    key = u["key"]
+    if u["had_result"]:
+        session["results"][key] = u["prev_result"]
+    else:
+        session["results"].pop(key, None)
+    if not u["was_ever_wrong"]:
+        session.get("ever_wrong", set()).discard(key)
+    if u["was_hinted"]:
+        session.setdefault("hint_used", set()).add(key)
+    else:
+        session.get("hint_used", set()).discard(key)
+    if not u["in_buffer"]:
+        session["review_buffer"] = [(v, n) for v, n in session["review_buffer"]
+                                    if card_key(v) != key]
+    if not u["in_end"]:
+        session["end_review"] = [v for v in session["end_review"] if card_key(v) != key]
+    session["_undo"] = None
+    return True
+
+
 def _session_outcomes(session: dict) -> tuple[dict, int, int]:
     """Per-card effective outcome for stats: a card counts as known only if it
     was never missed this session — an error anywhere (or a used hint) keeps it
@@ -991,7 +1153,8 @@ async def safe_edit(bot, chat_id: int, message_id: int,
             raise
 
 
-async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -> None:
+async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False,
+                    reverse: bool = False) -> None:
     item = current_item(session)
     if item is None:
         await show_results(chat_id, session, bot)
@@ -1000,7 +1163,7 @@ async def show_card(chat_id: int, session: dict, bot, type_mode: bool = False) -
     ex_type = item_type(item)          # per-card, so mixed/review decks work
     tm = type_mode and ex_type == "verbs"   # input applies to any verb card
     if ex_type == "verbs":
-        text, kb = build_verb_card(session, type_mode=tm)
+        text, kb = build_verb_card(session, type_mode=tm, reverse=reverse)
     elif ex_type == "prep":
         text, kb = build_prep_card(session)
     elif ex_type == "adjprep":
@@ -1184,7 +1347,8 @@ async def _launch_session(context, query, chat_id, session, ex_type, last_size, 
     session["message_id"] = msg_id
     context.user_data["card_message_id"] = msg_id
     context.user_data["session"] = session
-    await show_card(chat_id, session, context.bot, type_mode=type_mode)
+    await show_card(chat_id, session, context.bot, type_mode=type_mode,
+                    reverse=context.user_data.get("reverse_mode", False))
 
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1208,6 +1372,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     chat_id      = query.message.chat_id
     user_id      = query.from_user.id
     type_mode    = context.user_data.get("type_mode", False)
+    reverse_mode = context.user_data.get("reverse_mode", False)
 
     # Heal/drop a session that survived a redeploy with an older shape.
     _raw = context.user_data.get("session")
@@ -1237,7 +1402,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         session["message_id"] = query.message.message_id
         context.user_data["card_message_id"] = query.message.message_id
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+        await show_card(chat_id, session, context.bot, type_mode=type_mode, reverse=reverse_mode)
         return
 
     # ── Menu screens ──
@@ -1309,13 +1474,22 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data["type_mode"] = not type_mode
         ex_type = context.user_data.get("pending_type", "verbs")
         text, kb = build_size_selector(ex_type, type_mode=context.user_data["type_mode"],
-                                       user_id=user_id)
+                                       user_id=user_id, reverse_mode=reverse_mode)
+        await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
+        return
+
+    if data == "toggle_reverse":
+        context.user_data["reverse_mode"] = not reverse_mode
+        ex_type = context.user_data.get("pending_type", "verbs")
+        text, kb = build_size_selector(ex_type, type_mode=type_mode, user_id=user_id,
+                                       reverse_mode=context.user_data["reverse_mode"])
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
     if action == "pick" and (arg in CONTENT or arg == "mixed"):
         context.user_data["pending_type"] = arg
-        text, kb = build_size_selector(arg, type_mode=type_mode, user_id=user_id)
+        text, kb = build_size_selector(arg, type_mode=type_mode, user_id=user_id,
+                                       reverse_mode=reverse_mode)
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 
@@ -1361,7 +1535,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         session["message_id"] = msg_id
         context.user_data["card_message_id"] = msg_id
         context.user_data["session"] = session
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+        await show_card(chat_id, session, context.bot, type_mode=type_mode, reverse=reverse_mode)
         return
 
     if data == "new_session":
@@ -1405,7 +1579,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         session["message_id"] = msg_id
         context.user_data["card_message_id"] = msg_id
         context.user_data["session"] = session
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+        await show_card(chat_id, session, context.bot, type_mode=type_mode, reverse=reverse_mode)
         return
 
     # ── Final screen inline stats ──
@@ -1446,7 +1620,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data == "start_review":
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+        await show_card(chat_id, session, context.bot, type_mode=type_mode, reverse=reverse_mode)
         return
 
     if data == "finish_session":
@@ -1464,7 +1638,10 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         chosen         = arg
         correct_answer = item.get("answer") or item.get("pattern") or item.get("preposition")
         correct        = chosen == correct_answer
-        text, kb       = build_choice_result(item, chosen, correct)
+        known_now      = correct and card_key(item) not in session.get("ever_wrong", set())
+        snapshot_for_undo(session, item)
+        text, kb       = build_choice_result(item, chosen, correct,
+                                             interval_line=_interval_line(session, item, known_now))
         if correct:
             mark_known(session, item)
         else:
@@ -1488,16 +1665,23 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if tm:
             session.setdefault("hint_used", set()).add(card_key(item))
         prog = session.get("_last_progress") or progress_line(session, item)
+        v1   = item["v1"].split("/")[0]
         v2   = item["v2"].split("/")[0]
         v3   = item["v3"].split("/")[0]
-        if set(_norm_forms(item["v2"])) == set(_norm_forms(item["v3"])):
+        if reverse_mode:                      # RU→EN: the verb itself is the secret
+            hint_line = f"💡 Глагол на *{v1[0].lower()}…* ({len(v1)} букв)"
+            header    = f"*{item['translation']}*"
+        elif set(_norm_forms(item["v2"])) == set(_norm_forms(item["v3"])):
             hint_line = f"💡 Форма на *{v2[0].lower()}…* ({len(v2)} букв)"
+            header    = f"*{item['v1']}*\n_{item['translation']}_"
         else:
             hint_line = (f"💡 V2 на *{v2[0].lower()}…* ({len(v2)}) · "
                          f"V3 на *{v3[0].lower()}…* ({len(v3)})")
-        base = (f"{prog}\n\n*{item['v1']}*\n_{item['translation']}_\n\n{hint_line}")
+            header    = f"*{item['v1']}*\n_{item['translation']}_"
+        base = f"{prog}\n\n{header}\n\n{hint_line}"
         if tm:
-            text = f"{base}\n\n✍️ Напиши V2 и V3 через пробел:"
+            text = (f"{base}\n\n✍️ Напиши глагол и формы (V1 V2 V3):" if reverse_mode
+                    else f"{base}\n\n✍️ Напиши V2 и V3 через пробел:")
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("❓ Не помню", callback_data="reveal"),
                  InlineKeyboardButton("⏸ Пауза",     callback_data="stop_session")],
@@ -1513,23 +1697,29 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data == "knew":
         mark_known(session, item)
         advance(session)
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+        await show_card(chat_id, session, context.bot, type_mode=type_mode, reverse=reverse_mode)
 
     elif data == "didnt_know":
         mark_unknown(session, item)
         advance(session)
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+        await show_card(chat_id, session, context.bot, type_mode=type_mode, reverse=reverse_mode)
 
     elif data == "reveal":                     # «Не помню» in type mode → show forms
         session["awaiting_input"] = False
+        snapshot_for_undo(session, item)
         mark_unknown(session, item)
         session["_on_result"] = True
         text, kb = build_type_result(item, None, correct=False)
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
 
+    elif data == "undo":                       # «↩️ Отмена» on a result screen
+        if session.get("_on_result") and undo_last_answer(session):
+            await show_card(chat_id, session, context.bot,
+                            type_mode=type_mode, reverse=reverse_mode)
+
     elif data == "next":
         advance(session)
-        await show_card(chat_id, session, context.bot, type_mode=type_mode)
+        await show_card(chat_id, session, context.bot, type_mode=type_mode, reverse=reverse_mode)
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1553,7 +1743,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             except Exception:
                 pass
             advance(session)
-            await show_card(chat_id, session, context.bot, type_mode=True)
+            await show_card(chat_id, session, context.bot, type_mode=True,
+                            reverse=context.user_data.get("reverse_mode", False))
         return
 
     item = current_item(session)
@@ -1565,27 +1756,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.delete()
     except Exception:
         pass
-    raw   = update.message.text.strip()
-    parts = _norm_forms(raw)
+    raw = update.message.text.strip()
+    reverse_mode   = context.user_data.get("reverse_mode", False)
+    correct, typo  = check_typed_answer(item, raw, reverse=reverse_mode)
 
-    expected_v2 = _norm_forms(item["v2"])
-    expected_v3 = _norm_forms(item["v3"])
-    if set(expected_v2) == set(expected_v3):
-        # V2 == V3 (e.g. cut/cut/cut): one word is enough, but extra words must
-        # still be the right form — «sat sitten» is wrong, not correct.
-        correct = bool(parts) and all(p in expected_v2 for p in parts)
-    else:
-        # All tokens before the last must be valid V2 forms; the last must be V3.
-        # This accepts "went gone" (normal) and "was/were been" (multi-variant V2)
-        # while rejecting "went garbage gone" (extra unrecognised tokens).
-        correct = (
-            len(parts) >= 2
-            and parts[-1] in expected_v3
-            and all(p in expected_v2 for p in parts[:-1])
-        )
-
-    hinted = card_key(item) in session.get("hint_used", set())
-    text, kb = build_type_result(item, raw, correct, hinted=hinted)
+    hinted    = card_key(item) in session.get("hint_used", set())
+    known_now = correct and not hinted and card_key(item) not in session.get("ever_wrong", set())
+    snapshot_for_undo(session, item)
+    text, kb = build_type_result(item, raw, correct, hinted=hinted, typo=typo,
+                                 interval_line=_interval_line(session, item, known_now))
     if correct and not hinted:
         mark_known(session, item)
     else:

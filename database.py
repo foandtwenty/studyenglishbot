@@ -212,6 +212,15 @@ def get_lifetime_stats(user_id: int) -> dict:
     }
 
 
+def get_box(user_id: int, key: str) -> int:
+    """Current Leitner box of a card (0 = never answered)."""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT box FROM verb_stats WHERE user_id=? AND verb_v1=?", (user_id, key)
+        ).fetchone()
+    return row["box"] if row and row["box"] else 0
+
+
 def get_new_today_count(user_id: int) -> int:
     """Cards that were first introduced today (their first_seen == today)."""
     with _conn() as c:

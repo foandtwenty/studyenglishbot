@@ -266,3 +266,79 @@ def test_main_menu_max_four_primary_buttons(harness):
     assert len(kb.inline_keyboard) <= 4
     flat = str(kb)
     assert "resume_session" in flat and "menu_topics" in flat and "menu_profile" in flat
+
+
+def test_undo_restores_state_after_wrong_answer(harness):
+    harness.press("pick:verbs")
+    harness.press("toggle_mode")
+    harness.press("lvl:1")
+    s = harness.ctx.user_data["session"]
+    item = bot.current_item(s)
+    key = bot.card_key(item)
+    harness.say("totally wrong")                       # wrong -> marked + queued
+    assert s["results"][key] is False and s["end_review"]
+    harness.press("undo")                              # ↩️ Отмена on the result
+    assert key not in s["results"]                     # mark reverted
+    assert key not in s["ever_wrong"]
+    assert s["review_buffer"] == [] and s["end_review"] == []
+    assert s["pos"] == 0 and s["awaiting_input"] is True   # question re-shown
+    harness.say(f"{item['v2']} {item['v3']}")          # answer again, correctly
+    assert s["results"][key] is True
+
+
+def test_undo_ignored_after_next(harness):
+    harness.press("pick:verbs")
+    harness.press("toggle_mode")
+    harness.press("lvl:1")
+    s = harness.ctx.user_data["session"]
+    item = bot.current_item(s)
+    harness.say(f"{item['v2']} {item['v3']}")
+    harness.press("next")                              # advanced — undo now invalid
+    pos = s["pos"]
+    harness.press("undo")
+    assert s["pos"] == pos                             # nothing happened
+    assert s["results"][bot.card_key(item)] is True
+
+
+def test_typo_answer_accepted_and_labelled(harness):
+    harness.press("pick:verbs")
+    harness.press("toggle_mode")
+    harness.press("lvl:all")
+    s = harness.ctx.user_data["session"]
+    # find a verb with a long V3 eligible for typo forgiveness
+    item = next(i for i in s["queue"]
+                if len(i["v3"].split("/")[0]) >= 5 and i["v2"] != i["v3"])
+    s["queue"].insert(s["pos"], item)
+    v3 = item["v3"].split("/")[0]
+    harness.say(f"{item['v2'].split('/')[0]} {v3[1]}{v3[0]}{v3[2:]}")  # swap first two letters
+    assert "опечаткой" in harness.ctx.bot.edits[-1].text
+    assert s["results"][bot.card_key(item)] is True    # counted as known
+
+
+def test_interval_line_on_correct_answer(harness):
+    harness.press("pick:verbs")
+    harness.press("toggle_mode")
+    harness.press("lvl:1")
+    s = harness.ctx.user_data["session"]
+    item = bot.current_item(s)
+    harness.say(f"{item['v2']} {item['v3']}")
+    assert "Повтор через 1 день" in harness.ctx.bot.edits[-1].text   # box 0 -> 1
+
+
+def test_reverse_mode_full_flow(harness):
+    harness.press("pick:verbs")
+    harness.press("toggle_mode")
+    harness.press("toggle_reverse")
+    harness.press("lvl:1")
+    s = harness.ctx.user_data["session"]
+    item = bot.current_item(s)
+    card = harness.ctx.bot.edits[-1].text
+    assert item["translation"] in card                 # RU prompt shown
+    assert item["v1"] not in card.split("💬")[0]        # the verb itself hidden
+    harness.say(f"{item['v1']} {item['v2']} {item['v3']}")
+    assert "Верно" in harness.ctx.bot.edits[-1].text
+    assert s["results"][bot.card_key(item)] is True
+    # forms-only answer (no V1) must be wrong in reverse mode
+    harness.press("undo")
+    harness.say(f"{item['v2']} {item['v3']}")
+    assert s["results"][bot.card_key(item)] is False
