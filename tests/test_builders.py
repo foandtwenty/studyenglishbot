@@ -88,7 +88,7 @@ def test_final_screen_counts_and_review_block():
         "original_total": 2, "exercise_type": "verbs", "user_id": None,
     }
     text, kb = bot.build_final(session, streak=0)
-    assert "Сессия завершена" in text
+    assert "Тренировка завершена" in text
     assert "50%" in text
     assert "go" in text                      # in the "Повтори" block
     assert "Ещё раунд" in str(kb) and "В меню" in str(kb)

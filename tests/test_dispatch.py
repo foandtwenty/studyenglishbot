@@ -138,7 +138,7 @@ def test_reveal_shows_forms_and_marks_unknown(harness):
 
 def test_stale_session_shows_notice(harness):
     harness.press("knew")                            # no active session
-    assert "не найдена" in harness.ctx.bot.edits[-1].text
+    assert "Активной тренировки нет" in harness.ctx.bot.edits[-1].text
 
 
 def test_main_menu_has_profile_not_service_buttons(harness):

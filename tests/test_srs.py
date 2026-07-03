@@ -130,12 +130,12 @@ def test_due_count_matches_deck_ignoring_orphans(db, monkeypatch):
     assert bot._due_count(1) == len(bot._build_review_deck(1)) == 1
 
 
-def test_help_reminders_button_present_with_user(db):
+def test_reminders_button_lives_in_profile(db):
     db.ensure_user(1)
-    _, kb = bot.build_menu_help(1)
-    assert "menu_reminders" in str(kb)
-    _, kb2 = bot.build_menu_help()
-    assert "menu_reminders" not in str(kb2)
+    _, kb = bot.build_menu_profile(1)
+    assert "menu_reminders" in str(kb)          # a setting, so it's in Профиль
+    _, kb_help = bot.build_menu_help(1)
+    assert "menu_reminders" not in str(kb_help)  # …not buried in help
 
 
 def test_reminder_settings_screen_steppers(db):

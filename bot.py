@@ -65,25 +65,23 @@ HELP_TEXT = (
     "*Как работает:*\n"
     "Сначала вспоминаешь сам, затем смотришь ответ и честно оцениваешь.\n"
     "Ошибочные карточки возвращаются через 2–3 хода и снова в конце.\n\n"
-    "*Интервальное повторение:*\n"
-    "🎯 *Тренировка дня* собирает карточки, которым пора освежиться: сложные "
-    "(где ты ошибался) идут первыми и возвращаются часто, а верные — по "
-    "растущим интервалам (1, 2, 4, 7… дней), чтобы не забылись.\n\n"
-    "*В главном меню:*\n"
-    "🎲 Всё вперемешку — карточки всех типов сразу\n"
-    "📊 Статистика · 📋 Сложные — список твоих ошибок\n"
-    "📈 История · ❓ Помощь\n\n"
-    "*Перед стартом:*\n"
-    "Выбери уровень — 🟢 Базовый (самые частые), 🟡 Средний, 🔴 Продвинутый "
-    "— или «📚 Все».\n"
+    "*🎯 Тренировка дня:*\n"
+    "Собирает карточки, которым пора освежиться: сложные идут первыми, "
+    "верные возвращаются по растущим интервалам (1, 2, 4, 7… дней). "
+    "Плюс несколько новых слов каждый день.\n\n"
+    "*Перед стартом темы:*\n"
+    "Уровень — 🟢 Базовый (самые частые), 🟡 Средний, 🔴 Продвинутый или «Все».\n"
     "🎯 Только ошибки — тренировать лишь сложные карточки\n"
-    "✏️ Режим ввода — печатай формы вместо кнопок (проверка выученного)\n"
-    "🔄 RU→EN — показывается перевод, вспоминаешь глагол и формы\n\n"
+    "✏️ Ввод ответа — печатай формы вместо кнопок (проверка выученного)\n"
+    "🔄 Направление RU→EN — показывается перевод, вспоминаешь глагол и формы\n\n"
     "*На карточке глагола:*\n"
-    "💡 Подсказка — первые буквы и длина форм\n"
+    "💡 Подсказка — первые буквы и длина форм (карточка пойдёт в повтор)\n"
     "В режиме ввода просто отправь формы в чат; «❓ Не помню» покажет ответ. "
     "Одна опечатка в длинном слове прощается. На экране результата любой "
-    "текст работает как «Дальше», а «↩️ Отмена» позволяет переответить."
+    "текст работает как «Дальше», а «↩️ Отмена» позволяет переответить.\n\n"
+    "*⚙️ В Профиле:*\n"
+    "📊 Статистика · 📈 История · 📋 Сложные карточки (со своей тренировкой) "
+    "· 🔔 Напоминания (время и часовой пояс)"
 )
 
 
@@ -627,14 +625,17 @@ def build_menu_topics() -> tuple[str, InlineKeyboardMarkup]:
 def build_menu_profile(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     header = _progress_header(user_id)
     text   = (f"{header}\n\n" if header else "") + "⚙️ *Профиль и прогресс*"
+    # Data first, the actionable weak-cards screen on its own row, settings
+    # and help below — «Напоминания» is a setting, not a help topic.
     kb = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 Статистика", callback_data="menu_stats"),
-            InlineKeyboardButton("📋 Сложные",    callback_data="menu_weak"),
-        ],
-        [
             InlineKeyboardButton("📈 История",    callback_data="menu_history"),
-            InlineKeyboardButton("❓ Помощь",     callback_data="menu_help"),
+        ],
+        [InlineKeyboardButton("📋 Сложные карточки", callback_data="menu_weak")],
+        [
+            InlineKeyboardButton("🔔 Напоминания", callback_data="menu_reminders"),
+            InlineKeyboardButton("❓ Помощь",      callback_data="menu_help"),
         ],
         [InlineKeyboardButton("← Назад", callback_data="back_to_types")],
     ])
@@ -653,7 +654,7 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
                 f"Карточек пройдено: *{lt['total_cards']}*\n"
                 f"Освоено: *{lt['mastered']}*\n"
                 f"Изучается: *{lt['learning']}*\n"
-                f"Сессий: *{lt['sessions']}*"
+                f"Тренировок: *{lt['sessions']}*"
             )
         elif has_active:
             lifetime_block = ""      # the current-session block already shows progress
@@ -724,7 +725,7 @@ def build_menu_weak(user_id: int, back_callback: str = "menu_profile",
         rows_kb.append([InlineKeyboardButton(f"🎯 Тренировать ({n})",
                                              callback_data="train_weak")])
     rows_kb.append([InlineKeyboardButton(back_label, callback_data=back_callback)])
-    return f"📋 *Сложные карточки:*\n{body}", InlineKeyboardMarkup(rows_kb)
+    return f"📋 *Сложные карточки*\n{body}", InlineKeyboardMarkup(rows_kb)
 
 
 def build_menu_history(user_id: int, back_callback: str = "menu_profile",
@@ -743,7 +744,7 @@ def build_menu_history(user_id: int, back_callback: str = "menu_profile",
                              f"{r['known']}/{r['total']} ({pct}%)")
             body = "\n".join(lines)
             if len(lines) >= 10:
-                body += "\n\n_показаны последние 10 сессий_"
+                body += "\n\n_показаны последние 10 тренировок_"
         else:
             body = ("Здесь пока пусто.\n"
                     "Пройди первую тренировку — и тут появятся результаты! 🚀")
@@ -751,15 +752,12 @@ def build_menu_history(user_id: int, back_callback: str = "menu_profile",
         logger.exception("Failed to load history for user %s", user_id)
         body = "Не удалось загрузить данные."
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(back_label, callback_data=back_callback)]])
-    return f"📈 *История сессий:*\n\n{body}", kb
+    return f"📈 *История тренировок*\n\n{body}", kb
 
 
 def build_menu_help(user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    rows: list[list[InlineKeyboardButton]] = []
-    if user_id is not None:
-        rows.append([InlineKeyboardButton("🔔 Напоминания", callback_data="menu_reminders")])
-    rows.append([InlineKeyboardButton("← Назад", callback_data="menu_profile")])
-    return HELP_TEXT, InlineKeyboardMarkup(rows)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="menu_profile")]])
+    return HELP_TEXT, kb
 
 
 def _tz_label(tz: int) -> str:
@@ -787,7 +785,7 @@ def build_reminder_settings(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
                 InlineKeyboardButton(f"🌍 {tz}",     callback_data="noop"),
                 InlineKeyboardButton("▶",            callback_data="rem_tz_inc"),
             ],
-            [InlineKeyboardButton("← Назад", callback_data="menu_help")],
+            [InlineKeyboardButton("← Назад", callback_data="menu_profile")],
         ])
     else:
         text = (
@@ -796,7 +794,7 @@ def build_reminder_settings(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔔 Включить", callback_data="rem_toggle")],
-            [InlineKeyboardButton("← Назад",    callback_data="menu_help")],
+            [InlineKeyboardButton("← Назад",    callback_data="menu_profile")],
         ])
     return text, kb
 
@@ -813,7 +811,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
             InlineKeyboardButton("20", callback_data="size:20"),
             InlineKeyboardButton("30", callback_data="size:30"),
         ]]
-        label = "✏️ Выключить ввод V2/V3" if type_mode else "✏️ Включить ввод V2/V3"
+        label = "✏️ Ввод ответа: вкл" if type_mode else "✏️ Ввод ответа: выкл"
         rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
         rev_label = ("🔄 Направление: RU→EN" if reverse_mode
                      else "🔄 Направление: EN→RU")
@@ -854,7 +852,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
             pass
 
     if exercise_type == "verbs":
-        label = "✏️ Выключить ввод V2/V3" if type_mode else "✏️ Включить ввод V2/V3"
+        label = "✏️ Ввод ответа: вкл" if type_mode else "✏️ Ввод ответа: выкл"
         rows.append([InlineKeyboardButton(label, callback_data="toggle_mode")])
         rev_label = ("🔄 Направление: RU→EN" if reverse_mode
                      else "🔄 Направление: EN→RU")
@@ -1124,7 +1122,7 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
     # of «Ещё раунд»: the cards were just rescheduled, an immediate rerun is a
     # dead end that contradicts spaced repetition.
     is_daily = ex_type == "review"
-    title    = "✅ *Тренировка дня выполнена!*" if is_daily else "🎉 *Сессия завершена!*"
+    title    = "✅ *Тренировка дня выполнена!*" if is_daily else "🎉 *Тренировка завершена!*"
     tmr      = _tomorrow_line(session.get("user_id")) if is_daily else ""
     tmr_line = f"\n\n{tmr} — жду тебя!" if tmr else ""
 
@@ -1572,7 +1570,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "reminders_off":
         db.set_reminders(user_id, False)
-        await query.answer("🔕 Напоминания отключены. Включить — в разделе «Помощь».",
+        await query.answer("🔕 Напоминания отключены. Включить — в разделе «Профиль».",
                            show_alert=True)
         return
 
@@ -1741,7 +1739,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not session:
         context.user_data["card_message_id"] = query.message.message_id
         text, kb = build_type_selector(user_id=user_id)
-        text = "_Активная сессия не найдена — выбери тему заново._\n\n" + text
+        text = "_Активной тренировки нет — выбери тему заново._\n\n" + text
         await safe_edit(context.bot, chat_id, query.message.message_id, text, kb)
         return
 

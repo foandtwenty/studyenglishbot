@@ -24,7 +24,7 @@ def test_show_card_on_exhausted_deck_finalizes(fake_bot, make_session, db):
     bot.mark_known(s, A)
     s["pos"] = len(s["queue"])                # deck exhausted, no end_review
     run(bot.show_card(1, s, fake_bot))
-    assert "Сессия завершена" in fake_bot.last_text
+    assert "Тренировка завершена" in fake_bot.last_text
 
 
 def test_show_results_transitions_to_end_review(fake_bot, make_session, monkeypatch):
@@ -48,7 +48,7 @@ def test_show_results_finalizes_from_end_review_phase(fake_bot, make_session, db
     s["queue"] = []
     s["pos"] = 0
     run(bot.show_results(1, s, fake_bot))
-    assert "Сессия завершена" in fake_bot.last_text
+    assert "Тренировка завершена" in fake_bot.last_text
     assert db.get_history(1)[0]["total"] == 2     # persisted
 
 
@@ -58,7 +58,7 @@ def test_show_results_finalizes_and_persists(fake_bot, make_session, db):
     bot.mark_known(s, A)
     s["pos"] = len(s["queue"])
     run(bot.show_results(1, s, fake_bot))
-    assert "Сессия завершена" in fake_bot.last_text
+    assert "Тренировка завершена" in fake_bot.last_text
     # a session row was written
     assert db.get_history(1)[0]["total"] == 1
     # known answer recorded under namespaced key
