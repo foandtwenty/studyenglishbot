@@ -121,6 +121,16 @@ def _level_deck(exercise_type: str, level: int) -> list:
 # impossible by construction, and make routing a pure, unit-testable function.
 DYNAMIC_PREFIXES = frozenset({"pick", "size", "ans", "lvl"})
 
+# Deck sizes offered by the mixed-mode selector ("all" = whole pool).
+SIZE_MAP = {"10": 10, "20": 20, "30": 30, "all": None}
+
+# Callbacks that mutate the active session — used by the stale-message guard:
+# taps on old card messages (user scrolled up) must not corrupt the current card.
+SESSION_MUTATING = frozenset({
+    "ans", "knew", "didnt_know", "reveal", "next",
+    "hint", "show", "finish_session", "start_review",
+})
+
 
 def parse_callback(data: str) -> tuple[str, str | None]:
     prefix, sep, arg = data.partition(":")
@@ -129,24 +139,25 @@ def parse_callback(data: str) -> tuple[str, str | None]:
     return data, None
 
 
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    """Russian plural agreement: 1 день / 2 дня / 5 дней."""
+    if n % 10 == 1 and n % 100 != 11:                  return one
+    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return few
+    return many
+
+
 def _streak_label(n: int) -> str:
-    if n % 10 == 1 and n % 100 != 11:                  return "день"
-    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return "дня"
-    return "дней"
+    return _plural(n, "день", "дня", "дней")
 
 
 def _card_plural(n: int) -> str:
     """Accusative — for «знаю N карточек», «учу N карточек»."""
-    if n % 10 == 1 and n % 100 != 11:                  return "карточку"
-    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return "карточки"
-    return "карточек"
+    return _plural(n, "карточку", "карточки", "карточек")
 
 
 def _card_plural_nom(n: int) -> str:
-    """Nominative — for labels like «тема · N карточек», «К повторению: N»."""
-    if n % 10 == 1 and n % 100 != 11:                  return "карточка"
-    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14): return "карточки"
-    return "карточек"
+    """Nominative — for labels like «тема · N карточек»."""
+    return _plural(n, "карточка", "карточки", "карточек")
 
 
 def _verb_forms_text(item: dict) -> str:
@@ -248,6 +259,15 @@ def _daily_counts(user_id: int | None) -> tuple[int, int]:
     except Exception:
         logger.exception("daily counts failed for user %s", user_id)
         return 0, 0
+
+
+def _daily_parts(reviews: int, new: int) -> str:
+    """Summary of the daily deck composition, e.g. «5 на повтор + 3 к изучению»."""
+    if reviews and new:
+        return f"{reviews} на повтор + {new} к изучению"
+    if reviews:
+        return f"{reviews} на повтор"
+    return f"{new} к изучению"
 
 
 def _due_count(user_id: int | None) -> int:
@@ -353,7 +373,7 @@ def current_item(session: dict) -> dict | None:
     return q[p] if p < len(q) else None
 
 
-def _resume_info(context) -> tuple[int, int] | None:
+def _resume_info(context) -> tuple[str, int, int] | None:
     """(theme_label, done, total) for an unfinished session that can be resumed,
     else None (a finished session has no current card)."""
     s = context.user_data.get("session")
@@ -383,7 +403,7 @@ def progress_line(session: dict, item: dict) -> str:
 # ─── Selectors ────────────────────────────────────────────────────────────────
 
 def build_type_selector(welcome: bool = False, user_id: int | None = None,
-                        resume: tuple[int, int] | None = None) -> tuple[str, InlineKeyboardMarkup]:
+                        resume: tuple[str, int, int] | None = None) -> tuple[str, InlineKeyboardMarkup]:
     if welcome:
         text = (
             "👋 *Привет! Я Study English Bot.*\n\n"
@@ -406,13 +426,7 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
             label, done, total = resume
             info.append(f"⏸ *На паузе:* {label} — осталось {total - done}")
         if daily:
-            if reviews and new:
-                parts = f"{reviews} на повтор + {new} к изучению"
-            elif reviews:
-                parts = f"{reviews} {_card_plural_nom(reviews)} на повтор"
-            else:
-                parts = f"{new} {_card_plural_nom(new)} к изучению"
-            info.append(f"🔔 *Тренировка дня:* {parts}")
+            info.append(f"🔔 *Тренировка дня:* {_daily_parts(reviews, new)}")
         header = _progress_header(user_id)
         blocks = []
         if info:   blocks.append("\n".join(info))
@@ -1028,30 +1042,10 @@ async def show_results(chat_id: int, session: dict, bot) -> None:
 # ─── Command handlers ─────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id  = update.effective_chat.id
     is_new   = db.ensure_user(update.effective_user.id)
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
-
-    text, kb    = build_type_selector(welcome=is_new, user_id=update.effective_user.id,
-                                      resume=_resume_info(context))
-    card_msg_id = context.user_data.get("card_message_id")
-    if card_msg_id:
-        try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id, message_id=card_msg_id,
-                text=text, parse_mode="Markdown", reply_markup=kb,
-            )
-            return
-        except BadRequest:
-            pass
-
-    msg = await context.bot.send_message(
-        chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=kb,
-    )
-    context.user_data["card_message_id"] = msg.message_id
+    text, kb = build_type_selector(welcome=is_new, user_id=update.effective_user.id,
+                                   resume=_resume_info(context))
+    await _render_menu(update, context, text, kb)
 
 
 async def _render_menu(update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -1349,10 +1343,9 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 return
             session, last_size = new_session(ex_type, user_id=user_id, deck=weak_deck), "weak"
         else:
-            size_map = {"10": 10, "20": 20, "30": 30, "all": None}
-            if arg not in size_map:
+            if arg not in SIZE_MAP:
                 return                        # ignore any crafted size:<garbage>
-            session, last_size = new_session(ex_type, size=size_map[arg], user_id=user_id), arg
+            session, last_size = new_session(ex_type, size=SIZE_MAP[arg], user_id=user_id), arg
         await _launch_session(context, query, chat_id, session, ex_type, last_size, type_mode)
         return
 
@@ -1407,8 +1400,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 return
             session = new_session(ex_type, deck=deck, user_id=user_id)
         else:
-            size_map = {"10": 10, "20": 20, "30": 30, "all": None}
-            session  = new_session(ex_type, size=size_map.get(last_size), user_id=user_id)
+            session = new_session(ex_type, size=SIZE_MAP.get(last_size), user_id=user_id)
         msg_id = context.user_data.get("card_message_id") or query.message.message_id
         session["message_id"] = msg_id
         context.user_data["card_message_id"] = msg_id
@@ -1448,11 +1440,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Ignore callbacks from old card messages (user scrolled up and tapped a stale button).
     # Menu-navigation callbacks that target query.message.message_id directly are exempt.
-    _session_mutating = frozenset({
-        "ans", "knew", "didnt_know", "reveal", "next",
-        "hint", "show", "finish_session", "start_review",
-    })
-    if (action in _session_mutating or data in _session_mutating) and \
+    if (action in SESSION_MUTATING or data in SESSION_MUTATING) and \
             query.message.message_id != session.get("message_id"):
         await query.answer()
         return
@@ -1640,8 +1628,7 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(
                 uid,
                 f"🔔 *Тренировка дня готова!*\n\n"
-                f"*{cnt}* {_card_plural_nom(cnt)}: "
-                f"{f'{reviews} на повтор + {new} к изучению' if reviews and new else f'{reviews} на повтор' if reviews else f'{new} к изучению'}.\n"
+                f"*{cnt}* {_card_plural_nom(cnt)}: {_daily_parts(reviews, new)}.\n"
                 f"Несколько минут — и слова закрепятся надолго 💪",
                 parse_mode="Markdown", reply_markup=kb,
             )
