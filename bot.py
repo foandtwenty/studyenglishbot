@@ -398,6 +398,14 @@ def _due_count(user_id: int | None) -> int:
         return 0
 
 
+def _review_backlog(user_id: int | None) -> int:
+    """Due cards beyond today's REVIEW_CAP — cards that won't fit in this
+    round and will need another pass. Surfaced on the menu so a «Тренировка
+    дня» badge that keeps reading 30 doesn't look like it's stuck; it's
+    genuinely capped, with more waiting."""
+    return max(0, _due_count(user_id) - REVIEW_CAP)
+
+
 def _bar(done: int, total: int, cells: int = 10) -> str:
     """Glanceable text progress bar: ▓▓▓░░░░░░░."""
     if total <= 0:
@@ -603,9 +611,20 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
             label, remaining = resume
             info.append(f"⏸ *На паузе:* {label} — осталось {remaining}")
         # The button already shows the daily count; a text line is added only
-        # when it explains the composition (both reviews AND new cards).
+        # when it explains something the bare number doesn't: the mix of
+        # reviews+new, or that a full REVIEW_CAP is a cap, not the whole
+        # backlog (independent of whether new cards are also present).
+        backlog = _review_backlog(user_id) if user_id else 0
         if reviews and new:
-            info.append(f"🎯 *Тренировка дня:* {_daily_parts(reviews, new)}")
+            base = _daily_parts(reviews, new)
+        elif backlog:
+            base = f"{reviews} на повтор"
+        else:
+            base = None
+        if base:
+            note = (f" _(ещё {backlog} {_card_plural_nom(backlog)} впереди — "
+                    f"показываем по {REVIEW_CAP} за раз)_") if backlog else ""
+            info.append(f"🎯 *Тренировка дня:* {base}{note}")
         blocks = []
         if info:
             blocks.append("\n".join(info))

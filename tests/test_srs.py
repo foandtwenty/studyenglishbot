@@ -190,6 +190,28 @@ def test_review_deck_capped_for_burnout(db, monkeypatch):
     assert len(bot._build_review_deck(1)) == bot.REVIEW_CAP          # capped
 
 
+def test_menu_explains_capped_backlog(db, monkeypatch):
+    """Regression: a badge that reads 30 both before and after a completed
+    round looked stuck/broken. The menu must say a real backlog remains."""
+    import datetime as _dt
+    db.ensure_user(1)
+    keys = [bot.card_key(i) for i in bot._mixed_pool()[:45]]        # 45 due
+    db.save_session(1, 0, 45, 45, {k: False for k in keys}, None)
+    monkeypatch.setattr(db, "_now",
+                        lambda: _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=5))
+    assert bot._review_backlog(1) == 45 - bot.REVIEW_CAP
+    text, _ = bot.build_type_selector(user_id=1)
+    assert "15" in text and "показываем по 30 за раз" in text
+
+
+def test_menu_no_backlog_note_under_cap(db):
+    db.ensure_user(1)
+    db.save_session(1, 0, 5, 5, {f"verbs::a{i}": False for i in range(5)})
+    assert bot._review_backlog(1) == 0
+    text, _ = bot.build_type_selector(user_id=1)
+    assert "показываем по" not in text
+
+
 def test_new_deck_is_unseen_and_easiest_first(db):
     db.ensure_user(1)
     # mark one Базовый verb as seen
