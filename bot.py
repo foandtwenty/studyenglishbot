@@ -60,12 +60,12 @@ HELP_TEXT = (
     "🔤 Неправильные глаголы — вспомни V2 и V3\n"
     "📍 Предлоги — in, on или at?\n"
     "➕ Глаголы + to / -ing\n"
-    "🔗 Прилагательные + предлог (afraid of...)\n"
+    "🔗 Прилагательные + предлог — afraid of, nervous about?\n"
     "🎲 Всё вперемешку — сам выбираешь размер, карточки любых типов подряд\n\n"
     "*Как работает:*\n"
     "Сначала вспоминаешь сам, затем смотришь ответ и честно оцениваешь.\n"
     "Ошибочные карточки возвращаются через 2–3 хода и снова в конце.\n\n"
-    "*🎯 Тренировка дня vs 🎲 Всё вперемешку:*\n"
+    "*В чём разница между 🎯 Тренировкой дня и 🎲 Всё вперемешку:*\n"
     "Тренировка дня — бот сам собирает то, что пора освежить: сложные карточки "
     "идут первыми, верные возвращаются по растущим интервалам (1, 2, 4, 7… "
     "дней), плюс несколько новых слов каждый день. Всё вперемешку — просто "
@@ -581,7 +581,7 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
             "🔤 Неправильные глаголы — вспомни V2 и V3\n"
             "📍 Предлоги — in, on или at?\n"
             "➕ Глаголы + to / -ing\n"
-            "🔗 Прилагательные — afraid of, nervous about?\n\n"
+            "🔗 Прилагательные + предлог — afraid of, nervous about?\n\n"
             "Ошибочные карточки возвращаются через 2–3 хода "
             "и снова в конце — так слова запоминаются лучше.\n\n"
             "*Не знаешь, с чего начать — жми «🎯 Тренировка дня»: "
@@ -875,7 +875,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
     for i in cards:
         by_level.setdefault(item_level(i), []).append(i)
 
-    text = (f"{TYPE_EMOJI.get(exercise_type, '🎯')} *{TYPE_LABEL[exercise_type]}*\n\n"
+    text = (f"{TYPE_EMOJI[exercise_type]} *{TYPE_LABEL[exercise_type]}*\n\n"
             f"С чего начнём? _(цифры — освоено)_")
     rows: list[list[InlineKeyboardButton]] = []
     for lvl in (1, 2, 3):
@@ -1019,7 +1019,7 @@ def build_vp_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"{progress_line(session, item)}\n\n"
         f"*{_vp_display(item)}*\n"
         f"_{item['translation']}_\n\n"
-        f"Какой шаблон?"
+        f"Выбери шаблон:"
     )
     kb = InlineKeyboardMarkup([
         [
@@ -1198,7 +1198,7 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
     unknown_line = f"Ещё учу: *{unknown}* {_card_plural(unknown)}\n" if unknown else ""
 
     # The daily training gets a completion celebration + tomorrow hook instead
-    # of «Ещё раунд»: the cards were just rescheduled, an immediate rerun is a
+    # of «Ещё раз»: the cards were just rescheduled, an immediate rerun is a
     # dead end that contradicts spaced repetition.
     is_daily = ex_type == "review"
     title    = "✅ *Тренировка дня выполнена!*" if is_daily else "🎉 *Тренировка завершена!*"
@@ -1218,7 +1218,7 @@ def build_final(session: dict, streak: int) -> tuple[str, InlineKeyboardMarkup]:
     )
     rows = []
     if not is_daily:
-        rows.append([InlineKeyboardButton("🔄 Ещё раунд", callback_data="repeat_session")])
+        rows.append([InlineKeyboardButton("🔄 Ещё раз", callback_data="repeat_session")])
     rows.append([
         InlineKeyboardButton("📋 Сложные", callback_data="final_weak"),
         InlineKeyboardButton("📈 История", callback_data="final_history"),
@@ -1459,11 +1459,11 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     current = context.user_data.get("type_mode", False)
     context.user_data["type_mode"] = not current
     msg = (
-        "✏️ *Режим ввода включён*\n\nДля глаголов: печатай V2 и V3 через пробел."
+        "✏️ *Ввод ответа включён*\n\nДля глаголов: печатай формы вместо кнопок."
         if context.user_data["type_mode"] else
-        "👆 *Режим кнопок включён*"
+        "👆 *Ввод ответа выключен* — снова кнопки."
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Главное меню", callback_data="back_to_types")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="back_to_types")]])
     await _render_menu(update, context, msg, kb)
 
 
@@ -1528,7 +1528,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ─── Callback handler ─────────────────────────────────────────────────────────
 
 async def _launch_session(context, query, chat_id, session, ex_type, last_size, type_mode):
-    """Common tail for starting a deck: remember it for «Ещё раунд», bind it to
+    """Common tail for starting a deck: remember it for «Ещё раз», bind it to
     the card message, and render the first card."""
     context.user_data["last_type"] = ex_type
     context.user_data["last_size"] = last_size
@@ -1723,7 +1723,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if arg == "weak":
             weak_deck = _build_weak_deck(ex_type, user_id)
             if not weak_deck:
-                await query.answer("Ошибок пока нет!", show_alert=True)
+                await query.answer("Ошибок больше нет — отличная работа! 🎉", show_alert=True)
                 return
             session, last_size = new_session(ex_type, user_id=user_id, deck=weak_deck), "weak"
         else:

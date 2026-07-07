@@ -82,7 +82,7 @@ def test_alert_branch_shows_alert_once_no_crash(harness):
     double-answer; the friendly alert must reach the user, not an error."""
     harness.press("pick:verbs")
     q = harness.press("size:weak")                   # no weak cards yet
-    assert q.answers == ["Ошибок пока нет!"]         # exactly the alert, nothing else
+    assert q.answers == ["Ошибок больше нет — отличная работа! 🎉"]  # exactly the alert
     assert harness.ctx.user_data.get("session") is None
 
 

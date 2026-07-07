@@ -91,7 +91,7 @@ def test_final_screen_counts_and_review_block():
     assert "Тренировка завершена" in text
     assert "50%" in text
     assert "go" in text                      # in the "Повтори" block
-    assert "Ещё раунд" in str(kb) and "В меню" in str(kb)
+    assert "Ещё раз" in str(kb) and "В меню" in str(kb)
 
 
 def test_final_screen_perfect_grade():
