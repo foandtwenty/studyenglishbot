@@ -165,7 +165,7 @@ VERBS = [
      "example": "She made a delicious chocolate cake."},
     {"v1": "mean",        "v2": "meant",       "v3": "meant",
      "translation": "значить, иметь в виду",
-     "example": "I didn't mean to upset you."},
+     "example": "I meant to call you yesterday, but I forgot."},
     {"v1": "meet",        "v2": "met",         "v3": "met",
      "translation": "встречать",
      "example": "We met at the coffee shop by chance."},

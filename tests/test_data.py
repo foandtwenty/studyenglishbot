@@ -74,3 +74,14 @@ def test_markdown_balanced_in_user_text():
         fields += [a["rule"], a["example"]]
     bad = [s for s in fields if not balanced(s)]
     assert not bad, bad
+
+
+def test_verb_example_demonstrates_a_past_form():
+    """Regression: 'mean' once shipped with an example using the bare present
+    ('didn't mean to...') instead of V2/V3 — defeating the point of showing
+    usage for a card that's about remembering the past forms."""
+    for v in VERBS:
+        ex = v["example"].lower()
+        forms = v["v2"].lower().split("/") + v["v3"].lower().split("/")
+        assert any(f in ex for f in forms), \
+            f"{v['v1']}: example shows no V2/V3 form: {v['example']!r}"

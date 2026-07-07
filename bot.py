@@ -43,8 +43,7 @@ CONTENT = {
 PHASE_MAIN = "main"
 PHASE_END_REVIEW = "end_review"
 
-TYPE_EMOJI = {"verbs": "🔤", "prep": "📍", "vp": "➕", "adjprep": "🔗",
-              "mixed": "🎲", "review": "🎯", "weak_all": "📋"}
+TYPE_EMOJI = {"verbs": "🔤", "prep": "📍", "vp": "➕", "adjprep": "🔗", "mixed": "🎲"}
 TYPE_LABEL = {
     "verbs":    "Неправильные глаголы",
     "prep":     "Предлоги in / on / at",
@@ -71,7 +70,7 @@ HELP_TEXT = (
     "Плюс несколько новых слов каждый день.\n\n"
     "*Перед стартом темы:*\n"
     "Уровень — 🟢 Базовый (самые частые), 🟡 Средний, 🔴 Продвинутый или «Все».\n"
-    "🎯 Только ошибки — тренировать лишь сложные карточки\n"
+    "❗ Только ошибки — тренировать лишь сложные карточки\n"
     "✏️ Ввод ответа — печатай формы вместо кнопок (проверка выученного)\n"
     "🔄 Направление RU→EN — показывается перевод, вспоминаешь глагол и формы\n\n"
     "*На карточке глагола:*\n"
@@ -162,15 +161,6 @@ def _card_plural_nom(n: int) -> str:
     return _plural(n, "карточка", "карточки", "карточек")
 
 
-def _verb_forms_text(item: dict) -> str:
-    v1, v2, v3 = item["v1"], item["v2"], item["v3"]
-    if v1 == v2 == v3:
-        return f"Все формы одинаковые: `{v1}`"
-    if v2 == v3:
-        return f"*V2 = V3:* `{v2}`"
-    return f"*V2:* `{v2}`\n*V3:* `{v3}`"
-
-
 def _vp_display(item: dict) -> str:
     return item["verb"].split("  ")[0].strip()
 
@@ -181,6 +171,22 @@ def _norm_forms(s: str) -> list[str]:
     tokens = s.lower().replace("/", " ").split()
     stripped = (re.sub(r"^[^\w]+|[^\w]+$", "", t) for t in tokens)
     return [t for t in stripped if t]
+
+
+def _forms_equal(a: str, b: str) -> bool:
+    """Same accepted forms regardless of slash order, e.g. 'dreamt/dreamed'
+    vs 'dreamed/dreamt'. The single comparison used everywhere forms are
+    treated as interchangeable (display, hints, answer checking)."""
+    return set(_norm_forms(a)) == set(_norm_forms(b))
+
+
+def _verb_forms_text(item: dict) -> str:
+    v1, v2, v3 = item["v1"], item["v2"], item["v3"]
+    if _forms_equal(v1, v2) and _forms_equal(v1, v3):
+        return f"Все формы одинаковые: `{v1}`"
+    if _forms_equal(v2, v3):
+        return f"*V2 = V3:* `{v2}`"
+    return f"*V2:* `{v2}`\n*V3:* `{v3}`"
 
 
 def _edit_distance_1(a: str, b: str) -> bool:
@@ -285,14 +291,14 @@ def _stat_key(exercise_type: str, iid: str) -> str:
 
 
 def _build_weak_deck(exercise_type: str, user_id: int) -> list:
+    """Single-type error deck for «❗ Только ошибки» — hardest first, shuffled
+    within equal-error tiers so repeat runs don't always open the same card."""
     weak_ids = db.get_weak_ids(user_id)
-    deck = []
-    for item in CONTENT[exercise_type]:
-        key = _stat_key(exercise_type, item_id(item))
-        if key in weak_ids:
-            deck.append((item, weak_ids[key]))
-    deck.sort(key=lambda x: x[1], reverse=True)
-    return [item for item, _ in deck]
+    deck = [it for it in CONTENT[exercise_type]
+           if _stat_key(exercise_type, item_id(it)) in weak_ids]
+    random.shuffle(deck)
+    deck.sort(key=lambda it: weak_ids[_stat_key(exercise_type, item_id(it))], reverse=True)
+    return deck
 
 
 def _mixed_pool() -> list:
@@ -304,10 +310,12 @@ WEAK_ALL_CAP = 30   # keep the cross-type error session humane
 
 
 def _build_weak_deck_all(user_id: int) -> list:
-    """Cross-type error deck for the «🎯 Тренировать» button on the weak-cards
-    screen — hardest first, capped like the daily review."""
+    """Cross-type error deck for the «❗ Тренировать» button on the weak-cards
+    screen — hardest first (shuffled within equal-error tiers), capped like
+    the daily review."""
     weak = db.get_weak_ids(user_id)
     deck = [it for it in _mixed_pool() if card_key(it) in weak]
+    random.shuffle(deck)
     deck.sort(key=lambda it: weak[card_key(it)], reverse=True)
     return deck[:WEAK_ALL_CAP]
 
@@ -377,8 +385,8 @@ def _daily_parts(reviews: int, new: int) -> str:
 
 def _due_count(user_id: int | None) -> int:
     """Due cards that still exist in the current content — matches what tapping
-    «К повторению» actually opens (db.get_due_count may include orphaned keys
-    left over from content edits)."""
+    «🎯 Тренировка дня» actually opens (db.get_due_count may include orphaned
+    keys left over from content edits)."""
     if not user_id:
         return 0
     try:
@@ -398,12 +406,14 @@ def _bar(done: int, total: int, cells: int = 10) -> str:
 
 def _tomorrow_line(user_id: int | None) -> str:
     """«📆 Завтра к повторению: N карточек» — the comeback hook after finishing
-    the daily training. Empty when nothing is scheduled."""
+    the daily training. Capped like the real deck will be (REVIEW_CAP), so a
+    multi-day backlog never shows a scarier number than tomorrow's session
+    will actually contain. Empty when nothing is scheduled."""
     if not user_id:
         return ""
     try:
         tomorrow = db.get_user_tomorrow(user_id)
-        due = len(set(db.get_due_ids(user_id, today=tomorrow)) & ALL_CARD_KEYS)
+        due = min(len(set(db.get_due_ids(user_id, today=tomorrow)) & ALL_CARD_KEYS), REVIEW_CAP)
     except Exception:
         return ""
     if due:
@@ -411,6 +421,14 @@ def _tomorrow_line(user_id: int | None) -> str:
     if ALL_CARD_KEYS - db.get_seen_keys(user_id):
         return "📆 Завтра: новая порция слов"
     return ""
+
+
+def _mastery_line(lt: dict) -> str:
+    """«Освоено: N · Изучается: M» from lifetime stats (M dropped when zero)."""
+    line = f"Освоено: *{lt['mastered']}*"
+    if lt["learning"]:
+        line += f"  ·  Изучается: *{lt['learning']}*"
+    return line
 
 
 def _done_today_block(user_id: int) -> str:
@@ -425,10 +443,7 @@ def _done_today_block(user_id: int) -> str:
     if streak:
         lines.append(f"🔥 Серия: *{streak} {_streak_label(streak)}* — "
                      f"вернись завтра, чтобы сохранить её.")
-    second = f"Освоено: *{lt['mastered']}*"
-    if lt["learning"]:
-        second += f"  ·  Изучается: *{lt['learning']}*"
-    lines.append(second)
+    lines.append(_mastery_line(lt))
     tmr = _tomorrow_line(user_id)
     if tmr:
         lines.append(tmr)
@@ -449,10 +464,7 @@ def _progress_header(user_id: int | None) -> str:
     lines = []
     if streak:
         lines.append(f"🔥 Серия: *{streak} {_streak_label(streak)}*")
-    second = f"Освоено: *{lt['mastered']}*"
-    if lt["learning"]:
-        second += f"  ·  Изучается: *{lt['learning']}*"
-    lines.append(second)
+    lines.append(_mastery_line(lt))
     return "\n".join(lines)
 
 
@@ -525,13 +537,17 @@ def current_item(session: dict) -> dict | None:
     return q[p] if p < len(q) else None
 
 
-def _resume_info(context) -> tuple[str, int, int] | None:
-    """(theme_label, done, total) for an unfinished session that can be resumed,
-    else None (a finished session has no current card)."""
+def _resume_info(context) -> tuple[str, int] | None:
+    """(theme_label, remaining) for an unfinished session that can be resumed,
+    else None (a finished session has no current card). `remaining` is the
+    current phase's queue from here on (len(queue) - pos) — correct for both
+    the main pass (grows when a mistake requeues a card) and an end-review
+    round, unlike original_total/first_shown which only describe the main
+    pass and would undercount a card that's on screen but not yet answered."""
     s = context.user_data.get("session")
     if s and current_item(s) is not None:
         label = TYPE_LABEL.get(s.get("exercise_type", ""), "")
-        return label, len(s["first_shown"]), s["original_total"]
+        return label, len(s["queue"]) - s["pos"]
     return None
 
 
@@ -555,7 +571,7 @@ def progress_line(session: dict, item: dict) -> str:
 # ─── Selectors ────────────────────────────────────────────────────────────────
 
 def build_type_selector(welcome: bool = False, user_id: int | None = None,
-                        resume: tuple[str, int, int] | None = None) -> tuple[str, InlineKeyboardMarkup]:
+                        resume: tuple[str, int] | None = None) -> tuple[str, InlineKeyboardMarkup]:
     if welcome:
         text = (
             "👋 *Привет! Я Study English Bot.*\n\n"
@@ -566,7 +582,8 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
             "🔗 Прилагательные — afraid of, nervous about?\n\n"
             "Ошибочные карточки возвращаются через 2–3 хода "
             "и снова в конце — так слова запоминаются лучше.\n\n"
-            "*Выбери тему и начнём!*"
+            "*Не знаешь, с чего начать — жми «🎯 Тренировка дня»: "
+            "бот сам подберёт карточки. Или выбери тему сам.*"
         )
     reviews, new = _daily_counts(user_id)
     daily = reviews + new
@@ -581,8 +598,8 @@ def build_type_selector(welcome: bool = False, user_id: int | None = None,
                 done_today = False
         info = []
         if resume:
-            label, done, total = resume
-            info.append(f"⏸ *На паузе:* {label} — осталось {total - done}")
+            label, remaining = resume
+            info.append(f"⏸ *На паузе:* {label} — осталось {remaining}")
         # The button already shows the daily count; a text line is added only
         # when it explains the composition (both reviews AND new cards).
         if reviews and new:
@@ -728,7 +745,7 @@ def build_menu_weak(user_id: int, back_callback: str = "menu_profile",
     rows_kb: list[list[InlineKeyboardButton]] = []
     if trainable:
         n = min(trainable, WEAK_ALL_CAP)
-        rows_kb.append([InlineKeyboardButton(f"🎯 Тренировать ({n})",
+        rows_kb.append([InlineKeyboardButton(f"❗ Тренировать ({n})",
                                              callback_data="train_weak")])
     rows_kb.append([InlineKeyboardButton(back_label, callback_data=back_callback)])
     return f"📋 *Сложные карточки*\n{body}", InlineKeyboardMarkup(rows_kb)
@@ -842,11 +859,15 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
     def done_of(items):
         return sum(1 for i in items if card_key(i) in known)
 
+    by_level: dict[int, list] = {1: [], 2: [], 3: []}
+    for i in cards:
+        by_level.setdefault(item_level(i), []).append(i)
+
     text = (f"{TYPE_EMOJI.get(exercise_type, '🎯')} *{TYPE_LABEL[exercise_type]}*\n\n"
             f"С чего начнём? _(цифры — освоено)_")
     rows: list[list[InlineKeyboardButton]] = []
     for lvl in (1, 2, 3):
-        lvl_items = [i for i in cards if item_level(i) == lvl]
+        lvl_items = by_level[lvl]
         if lvl_items:
             rows.append([InlineKeyboardButton(
                 f"{LEVEL_LABEL[lvl]} · {done_of(lvl_items)}/{len(lvl_items)}",
@@ -859,7 +880,7 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
             weak_deck = _build_weak_deck(exercise_type, user_id)
             if weak_deck:
                 rows.append([InlineKeyboardButton(
-                    f"🎯 Только ошибки ({len(weak_deck)})", callback_data="size:weak")])
+                    f"❗ Только ошибки ({len(weak_deck)})", callback_data="size:weak")])
         except Exception:
             pass
 
@@ -920,6 +941,44 @@ def build_verb_answer(session: dict) -> tuple[str, InlineKeyboardMarkup]:
         ],
     ])
     return text, kb
+
+
+def build_hint_card(session: dict, type_mode: bool,
+                    reverse: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+    """💡 Подсказка screen for the current verb card: first letter + length of
+    the secret (the verb itself in RU→EN, otherwise its forms)."""
+    item = current_item(session)
+    prog = session.get("_last_progress") or progress_line(session, item)
+    v1 = item["v1"].split("/")[0]
+    v2 = item["v2"].split("/")[0]
+    v3 = item["v3"].split("/")[0]
+    if reverse:                              # RU→EN: the verb itself is the secret
+        hint_line = f"💡 Глагол на *{v1[0].lower()}…* ({len(v1)} букв)"
+        header    = f"*{item['translation']}*"
+    elif _forms_equal(item["v2"], item["v3"]):
+        hint_line = f"💡 Форма на *{v2[0].lower()}…* ({len(v2)} букв)"
+        header    = f"*{item['v1']}*\n_{item['translation']}_"
+    else:
+        hint_line = (f"💡 V2 на *{v2[0].lower()}…* ({len(v2)}) · "
+                     f"V3 на *{v3[0].lower()}…* ({len(v3)})")
+        header    = f"*{item['v1']}*\n_{item['translation']}_"
+    base = (f"{prog}\n\n{header}\n\n{hint_line}\n"
+            f"_🔁 после подсказки карточка идёт в повтор_")
+
+    if type_mode:
+        ask = ("✍️ Напиши глагол и формы (V1 V2 V3):" if reverse
+               else "✍️ Напиши V2 и V3 через пробел:")
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❓ Не помню", callback_data="reveal"),
+             InlineKeyboardButton("⏸ Пауза",     callback_data="stop_session")],
+        ])
+    else:
+        ask = "Вспомни формы — потом загляни в ответ:"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
+            [InlineKeyboardButton("⏸ Пауза",            callback_data="stop_session")],
+        ])
+    return f"{base}\n\n{ask}", kb
 
 
 def build_prep_card(session: dict) -> tuple[str, InlineKeyboardMarkup]:
@@ -1677,7 +1736,7 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await show_card(chat_id, session, context.bot, type_mode=type_mode, reverse=reverse_mode)
         return
 
-    if data == "train_weak":                # «🎯 Тренировать» on the weak-cards screen
+    if data == "train_weak":                # «❗ Тренировать» on the weak-cards screen
         deck = _build_weak_deck_all(user_id)
         if not deck:
             await query.answer("Ошибок больше нет — отличная работа! 🎉", show_alert=True)
@@ -1819,41 +1878,12 @@ async def _on_button_impl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data == "hint":
         if item_type(item) != "verbs":
             return
-        tm   = type_mode             # item is a verb here; input applies anywhere
         # A peeked hint means the user couldn't recall unaided — mark ever_wrong
         # regardless of mode so self-reported ✅ after a hint still counts as a slip.
         session.setdefault("ever_wrong", set()).add(card_key(item))
-        if tm:
+        if type_mode:
             session.setdefault("hint_used", set()).add(card_key(item))
-        prog = session.get("_last_progress") or progress_line(session, item)
-        v1   = item["v1"].split("/")[0]
-        v2   = item["v2"].split("/")[0]
-        v3   = item["v3"].split("/")[0]
-        if reverse_mode:                      # RU→EN: the verb itself is the secret
-            hint_line = f"💡 Глагол на *{v1[0].lower()}…* ({len(v1)} букв)"
-            header    = f"*{item['translation']}*"
-        elif set(_norm_forms(item["v2"])) == set(_norm_forms(item["v3"])):
-            hint_line = f"💡 Форма на *{v2[0].lower()}…* ({len(v2)} букв)"
-            header    = f"*{item['v1']}*\n_{item['translation']}_"
-        else:
-            hint_line = (f"💡 V2 на *{v2[0].lower()}…* ({len(v2)}) · "
-                         f"V3 на *{v3[0].lower()}…* ({len(v3)})")
-            header    = f"*{item['v1']}*\n_{item['translation']}_"
-        base = (f"{prog}\n\n{header}\n\n{hint_line}\n"
-                f"_🔁 после подсказки карточка идёт в повтор_")
-        if tm:
-            text = (f"{base}\n\n✍️ Напиши глагол и формы (V1 V2 V3):" if reverse_mode
-                    else f"{base}\n\n✍️ Напиши V2 и V3 через пробел:")
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("❓ Не помню", callback_data="reveal"),
-                 InlineKeyboardButton("⏸ Пауза",     callback_data="stop_session")],
-            ])
-        else:
-            text = f"{base}\n\nВспомни формы — потом загляни в ответ:"
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("👁 Показать ответ", callback_data="show")],
-                [InlineKeyboardButton("⏸ Пауза",            callback_data="stop_session")],
-            ])
+        text, kb = build_hint_card(session, type_mode, reverse=reverse_mode)
         await safe_edit(context.bot, chat_id, session["message_id"], text, kb)
 
     elif data == "knew":

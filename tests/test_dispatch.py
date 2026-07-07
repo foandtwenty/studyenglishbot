@@ -172,6 +172,17 @@ def test_pause_keeps_session_and_offers_resume(harness):
     assert "resume_session" in str(last.kb)            # «Продолжить» offered
 
 
+def test_pause_remaining_count_includes_unanswered_current_card(harness):
+    """Regression: «осталось N» used to be computed from first_shown (cards
+    merely displayed), undercounting by one whenever paused on a fresh,
+    not-yet-answered card — the single most common moment to hit pause."""
+    harness.press("pick:verbs")
+    harness.press("lvl:1")                              # card 1/97 shown, unanswered
+    total = len(harness.ctx.user_data["session"]["queue"])
+    harness.press("stop_session")
+    assert f"осталось {total}" in harness.ctx.bot.edits[-1].text
+
+
 def test_resume_continues_the_session(harness):
     harness.press("pick:verbs")
     harness.press("lvl:1")
@@ -438,3 +449,31 @@ def test_selector_single_toggles_row(harness):
     toggle_rows = [r for r in kb.inline_keyboard
                    if any(b.callback_data in ("toggle_mode", "toggle_reverse") for b in r)]
     assert len(toggle_rows) == 1 and len(toggle_rows[0]) == 2   # one compact row
+
+
+def test_typing_advances_non_verb_result_in_type_mode(harness):
+    """With global type-mode on, «any text = Дальше» also applies to a
+    button-answered (non-verb) card's result screen inside a mixed deck —
+    typing to advance should feel consistent everywhere, not just on verbs.
+    Walks the deck through real interactions (typed answer + «next») so
+    awaiting_input is always correctly (re)set by show_card, as in production."""
+    harness.press("toggle_mode")
+    harness.press("pick:mixed")
+    harness.press("size:30")
+    s = harness.ctx.user_data["session"]
+    item = bot.current_item(s)
+    for _ in range(30):
+        if item is None or bot.item_type(item) != "verbs":
+            break
+        harness.say(f"{item['v2']} {item['v3']}")
+        harness.press("next")
+        item = bot.current_item(s)
+    else:
+        return                                     # no non-verb card in this shuffle
+    if item is None:
+        return
+    ca = item.get("answer") or item.get("pattern") or item.get("preposition")
+    harness.press(f"ans:{ca}")                    # answers via button -> result screen
+    pos_before = s["pos"]
+    harness.say("что угодно")                     # typed text should act as «Дальше»
+    assert s["pos"] == pos_before + 1

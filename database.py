@@ -323,12 +323,6 @@ def set_reminders(user_id: int, enabled: bool) -> None:
         c.execute("UPDATE users SET reminders=? WHERE user_id=?", (1 if enabled else 0, user_id))
 
 
-def get_reminders(user_id: int) -> bool:
-    with _conn() as c:
-        row = c.execute("SELECT reminders FROM users WHERE user_id=?", (user_id,)).fetchone()
-    return bool(row["reminders"]) if row else True
-
-
 def set_reminder_hour(user_id: int, hour: int) -> None:
     with _conn() as c:
         c.execute("UPDATE users SET reminder_hour=? WHERE user_id=?", (hour % 24, user_id))

@@ -40,9 +40,9 @@ def test_due_ids_are_namespaced(db, fake_date):
 
 def test_reminders_toggle(db):
     db.ensure_user(1)
-    assert db.get_reminders(1) is True
+    assert db.get_reminder_settings(1)["enabled"] is True
     db.set_reminders(1, False)
-    assert db.get_reminders(1) is False
+    assert db.get_reminder_settings(1)["enabled"] is False
 
 
 def test_reminder_targets(db, fake_date):
@@ -116,8 +116,8 @@ def test_main_menu_shows_due_and_mixed(db, fake_date):
 
 
 def test_due_count_matches_deck_ignoring_orphans(db, monkeypatch):
-    """The «К повторению» badge must equal what start_due actually opens, even
-    when verb_stats holds keys for content that no longer exists."""
+    """The «Тренировка дня» badge must equal what start_due actually opens,
+    even when verb_stats holds keys for content that no longer exists."""
     import datetime as _dt
     db.ensure_user(1)
     db.save_session(1, 1, 0, 1, {"verbs::go": True}, None)     # real card
@@ -217,3 +217,25 @@ def test_fresh_user_daily_is_new_cards(db):
     assert reviews == 0 and new == bot.NEW_PER_DAY
     _, kb = bot.build_type_selector(user_id=1)
     assert "start_due" in str(kb)                        # daily button shown to new user
+
+
+def test_weak_deck_single_type_orders_hardest_first(db):
+    db.ensure_user(1)
+    db.save_session(1, 0, 1, 1, {"go": False}, "verbs")
+    for _ in range(3):
+        db.save_session(1, 0, 1, 1, {"make": False}, "verbs")
+    deck = bot._build_weak_deck("verbs", 1)
+    ids = [bot.item_id(i) for i in deck]
+    assert ids.index("make") < ids.index("go")           # most errors first
+
+
+def test_weak_deck_all_orders_hardest_first_across_types(db):
+    db.ensure_user(1)
+    prep_key = bot.card_key(bot.PREPOSITIONS[0])
+    db.save_session(1, 0, 1, 1, {"verbs::go": False})
+    for _ in range(3):
+        db.save_session(1, 0, 1, 1, {prep_key: False})
+    deck = bot._build_weak_deck_all(1)
+    keys = [bot.card_key(i) for i in deck]
+    assert keys.index(prep_key) < keys.index("verbs::go")   # most errors first
+    assert len(deck) <= bot.WEAK_ALL_CAP
