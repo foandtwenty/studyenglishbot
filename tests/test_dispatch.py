@@ -154,10 +154,20 @@ def test_profile_then_stats_then_back_navigation(harness):
     assert "Профиль" in harness.ctx.bot.edits[-1].text
     flat = str(harness.ctx.bot.edits[-1].kb)
     assert "menu_stats" in flat and "menu_weak" in flat and "back_to_types" in flat
+    # «История» is folded into «Прогресс» — no separate Профиль entry point
+    assert "menu_history" not in flat
     harness.press("menu_stats")
     assert "Прогресс" in harness.ctx.bot.edits[-1].text
     # back goes to profile, not main
     assert "menu_profile" in str(harness.ctx.bot.edits[-1].kb)
+
+
+def test_progress_screen_includes_recent_history(harness):
+    """Прогресс folds in the last few sessions so Профиль doesn't need a
+    separate «История» destination for the same underlying question."""
+    database.save_session(1, 8, 2, 10, {f"verbs::v{i}": True for i in range(8)})
+    text, _ = bot.build_menu_stats(None, 1)
+    assert "Последние тренировки" in text and "8/10" in text
 
 
 def test_pause_keeps_session_and_offers_resume(harness):

@@ -60,14 +60,16 @@ HELP_TEXT = (
     "🔤 Неправильные глаголы — вспомни V2 и V3\n"
     "📍 Предлоги — in, on или at?\n"
     "➕ Глаголы + to / -ing\n"
-    "🔗 Прилагательные + предлог (afraid of...)\n\n"
+    "🔗 Прилагательные + предлог (afraid of...)\n"
+    "🎲 Всё вперемешку — сам выбираешь размер, карточки любых типов подряд\n\n"
     "*Как работает:*\n"
     "Сначала вспоминаешь сам, затем смотришь ответ и честно оцениваешь.\n"
     "Ошибочные карточки возвращаются через 2–3 хода и снова в конце.\n\n"
-    "*🎯 Тренировка дня:*\n"
-    "Собирает карточки, которым пора освежиться: сложные идут первыми, "
-    "верные возвращаются по растущим интервалам (1, 2, 4, 7… дней). "
-    "Плюс несколько новых слов каждый день.\n\n"
+    "*🎯 Тренировка дня vs 🎲 Всё вперемешку:*\n"
+    "Тренировка дня — бот сам собирает то, что пора освежить: сложные карточки "
+    "идут первыми, верные возвращаются по растущим интервалам (1, 2, 4, 7… "
+    "дней), плюс несколько новых слов каждый день. Всё вперемешку — просто "
+    "случайная порция карточек любого размера, без расписания.\n\n"
     "*Перед стартом темы:*\n"
     "Уровень — 🟢 Базовый (самые частые), 🟡 Средний, 🔴 Продвинутый или «Все».\n"
     "❗ Только ошибки — тренировать лишь сложные карточки\n"
@@ -79,8 +81,8 @@ HELP_TEXT = (
     "Одна опечатка в длинном слове прощается. На экране результата любой "
     "текст работает как «Дальше», а «↩️ Отмена» позволяет переответить.\n\n"
     "*⚙️ В Профиле:*\n"
-    "📊 Прогресс · 📈 История · 📋 Сложные карточки (со своей тренировкой) "
-    "· 🔔 Напоминания (время и часовой пояс)"
+    "📊 Прогресс (общая статистика + последние тренировки) · 📋 Сложные "
+    "карточки (со своей тренировкой) · 🔔 Напоминания (время и часовой пояс)"
 )
 
 
@@ -647,14 +649,13 @@ def build_menu_topics() -> tuple[str, InlineKeyboardMarkup]:
 def build_menu_profile(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     header = _progress_header(user_id)
     text   = (f"{header}\n\n" if header else "") + "⚙️ *Профиль*"
-    # Data first, the actionable weak-cards screen on its own row, settings
-    # and help below — «Напоминания» is a setting, not a help topic.
+    # «Прогресс» folds in the last few sessions, so a separate «История» entry
+    # would just be the same information split across two taps — one screen
+    # answers «how am I doing» completely. Full 10-session list still lives
+    # at build_menu_history (reachable from the session-end screen).
     # Paired-row labels stay ≤ 9 letters: longer ones truncate on narrow phones.
     kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📊 Прогресс", callback_data="menu_stats"),
-            InlineKeyboardButton("📈 История",  callback_data="menu_history"),
-        ],
+        [InlineKeyboardButton("📊 Прогресс", callback_data="menu_stats")],
         [InlineKeyboardButton("📋 Сложные карточки", callback_data="menu_weak")],
         [InlineKeyboardButton("🔔 Напоминания",      callback_data="menu_reminders")],
         [
@@ -663,6 +664,15 @@ def build_menu_profile(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         ],
     ])
     return text, kb
+
+
+def _history_line(row) -> str:
+    """`07.07` ▓▓▓▓▓▓▓▓░░ 10/12 (83%) — one session, compact date + glanceable bar."""
+    pct = round(row["known"] / row["total"] * 100) if row["total"] else 0
+    y, _, md = row["finished_at"].partition("-")
+    m, _, d  = md.partition("-")
+    date = f"{d}.{m}" if d else row["finished_at"]
+    return f"`{date}` {_bar(row['known'], row['total'])} {row['known']}/{row['total']} ({pct}%)"
 
 
 def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -711,8 +721,16 @@ def build_menu_stats(session: dict | None, user_id: int) -> tuple[str, InlineKey
             f"Активной тренировки нет. Выбери тему в меню и начни! 🚀\n"
         )
 
+    history_block = ""
+    try:
+        recent = db.get_history(user_id, limit=5)
+        if recent:
+            history_block = "\n\n📈 *Последние тренировки*\n" + "\n".join(_history_line(r) for r in recent)
+    except Exception:
+        logger.exception("Failed to load recent history for user %s", user_id)
+
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="menu_profile")]])
-    return current_block + lifetime_block, kb
+    return current_block + lifetime_block + history_block, kb
 
 
 def build_menu_weak(user_id: int, back_callback: str = "menu_profile",
@@ -756,17 +774,8 @@ def build_menu_history(user_id: int, back_callback: str = "menu_profile",
     try:
         rows = db.get_history(user_id)
         if rows:
-            lines = []
-            for r in rows:
-                pct = round(r["known"] / r["total"] * 100) if r["total"] else 0
-                # 2026-07-03 -> 03.07 — compact date + a glanceable bar
-                y, _, md = r["finished_at"].partition("-")
-                m, _, d  = md.partition("-")
-                date = f"{d}.{m}" if d else r["finished_at"]
-                lines.append(f"`{date}` {_bar(r['known'], r['total'])} "
-                             f"{r['known']}/{r['total']} ({pct}%)")
-            body = "\n".join(lines)
-            if len(lines) >= 10:
+            body = "\n".join(_history_line(r) for r in rows)
+            if len(rows) >= 10:
                 body += "\n\n_показаны последние 10 тренировок_"
         else:
             body = ("Здесь пока пусто.\n"
@@ -838,7 +847,10 @@ def build_size_selector(exercise_type: str, type_mode: bool = False,
     # Mixed is the "quick interleaved sampler" — sized by count, not level.
     # The verb-mode toggles live here too: they apply to verb cards in mixed.
     if exercise_type == "mixed":
-        text = f"{TYPE_EMOJI['mixed']} *{TYPE_LABEL['mixed']}*\n\nСколько карточек?"
+        text = (f"{TYPE_EMOJI['mixed']} *{TYPE_LABEL['mixed']}*\n"
+                f"_случайная подборка, без расписания повторений — "
+                f"для этого есть «Тренировка дня»_\n\n"
+                f"Сколько карточек?")
         rows = [[
             InlineKeyboardButton("10", callback_data="size:10"),
             InlineKeyboardButton("20", callback_data="size:20"),
